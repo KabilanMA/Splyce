@@ -1,5 +1,5 @@
 add_mlir_library(SplyceTransforms
-  VectorizeSpCoIt.cpp
+  CoIterPattern.cpp
 
   DEPENDS
   MLIRIR

@@ -7,7 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
-#define DEBUG_TYPE "coiter-match"
+#define DEBUG_TYPE "splyce-match"
 
 using namespace mlir;
 using namespace mlir::splyce;
@@ -133,10 +133,10 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
             continue;
         Value idx = load.getIndices()[0];
         for (auto &sd : desc.streams) {
-            if (idx == sd.iterVar && !coordLoads[sd.argIndex]) {
+            unsigned pos = static_cast<unsigned>(&sd - desc.streams.data());
+            if (idx == sd.iterVar && !coordLoads[pos]) {
                 // argIndex might exceed N if there are non-stream iter vars
                 // guard with the stream index instead
-                unsigned pos = &sd - &desc.streams[0];
                 coordLoads[pos] = load;
                 sd.loadedCoord = load.getResult();
                 sd.coordsMemref = load.getMemRef();

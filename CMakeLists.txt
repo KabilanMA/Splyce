@@ -25,5 +25,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 
 # 5. Build subdirectories
+add_subdirectory(include/Transforms)
 add_subdirectory(lib/Transforms)
-add_subdirectory(tools/splyce-opt)
+add_subdirectory(tools)
+add_subdirectory(test)

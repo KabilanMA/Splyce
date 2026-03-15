@@ -7,7 +7,7 @@
 // Flow:
 //
 //   CoIterVectorizePass::runOnOperation()
-//     └─ applyPatternsAndFoldGreedily(func, patterns)
+//     └─ applyPatternsGreedily(func, patterns)
 //           └─ CoIterVectorizePattern::matchAndRewrite(whileOp, rewriter)
 //                 ├─ tryMatchCoIter(whileOp)           // recognize
 //                 ├─ isProfitable(desc, minDensity)     // gate
@@ -16,6 +16,7 @@
 
 #include "Transforms/CoIterVectorizePass.h"
 #include "Transforms/CoIterPattern.h"
+#include "Transforms/CoIterVectorBuilder.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -31,7 +32,9 @@
 
 // include the TableGen-generated base class definition
 #define GEN_PASS_DEF_COITERVECTORIZE
-#include "Transforms/CoIterPasses.h.inc"
+namespace mlir {
+#include "Transforms/Passes.h.inc"
+}
 
 using namespace mlir;
 using namespace mlir::splyce;
@@ -83,7 +86,7 @@ private:
 // pass implementation
 namespace {
 
-struct CoIterVectorizePass : public impl::CoIterVectorizeBase<CoIterVectorizePass> {
+struct CoIterVectorizePass : public mlir::impl::CoIterVectorizeBase<CoIterVectorizePass> {
     // constructors: one for programmatic use (explicit args),
     // one for TableGen-generated CLI parsing (uses the base class options directly)
     CoIterVectorizePass() = default;
@@ -102,7 +105,7 @@ struct CoIterVectorizePass : public impl::CoIterVectorizeBase<CoIterVectorizePas
 
         // use the greedy driver: keeps applying patterns until a fixed point
         // this handles nested co-iteration loops (e.g. SpGEMM outer/inner)
-        if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns))))
+        if (failed(applyPatternsGreedily(op, std::move(patterns))))
             signalPassFailure();
     }
 };
@@ -112,10 +115,6 @@ struct CoIterVectorizePass : public impl::CoIterVectorizeBase<CoIterVectorizePas
 
 void mlir::populateCoIterVectorizePatterns(RewritePatternSet &patterns, unsigned vectorWidth, float minDensity) {
     patterns.add<CoIterVectorizePattern>(patterns.getContext(), vectorWidth, minDensity);
-}
-
-std::unique_ptr<Pass> mlir::createCoIterVectorizePass(unsigned vectorWidth, float minDensity, bool tailFallback) {
-    return std::make_unique<CoIterVectorizePass>(vectorWidth, minDensity, tailFallback);
 }
 
 std::unique_ptr<Pass> mlir::createCoIterVectorizePass(unsigned vectorWidth, float minDensity, bool tailFallback) {

@@ -26,7 +26,9 @@ void registerCoIterVectorizePass();
 } // namespace mlir
 
 // generated base-class boilerplate from TableGen
-#define GEN_PASS_CLASSES
-#include "Transforms/CoIterPasses.td"
+#define GEN_PASS_DECL_COITERVECTORIZE
+namespace mlir {
+#include "Transforms/Passes.h.inc"
+}
 
 #endif // TRANSFORMS_SPLYCE_VECTORIZE_PASS_H

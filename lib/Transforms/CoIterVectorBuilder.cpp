@@ -82,7 +82,7 @@ void VectorLoopBuilder::build(Location loc) {
         ValueRange(initVals),
 
         // condition block - all N pointers still in bounds
-        [&](OpBuilder & condB, Location condLoc, Block::BlockArgListType args) {
+        [&](OpBuilder & condB, Location condLoc, ValueRange args) {
             ImplicitLocOpBuilder cb(condLoc, condB);
             // build AND-tree of N "cmpi ult" ops
             Value cond;
@@ -96,7 +96,7 @@ void VectorLoopBuilder::build(Location loc) {
         },
 
         // do block
-        [&](OpBuilder & doB, Location doLoc, Block::BlockArgListType args) {
+        [&](OpBuilder & doB, Location doLoc, ValueRange args) {
             ImplicitLocOpBuilder db(doLoc, doB);
 
             // collect current pointers from block args
@@ -294,7 +294,7 @@ Value VectorLoopBuilder::emitVectorKernel(Location loc, Value vaVec, llvm::Array
 void VectorLoopBuilder::emitScatter(Location loc, Value result, Value driverCoords, Value matchMask) {
     ImplicitLocOpBuilder b(loc, this->b);
     Value base = b.create<arith::ConstantIndexOp>(0);
-    b.create<vector::ScatterOp>(desc.outputMemref, ValueRange{base}, driverCoords, matchMask, result);
+    b.create<vector::ScatterOp>(Type(), desc.outputMemref, ValueRange{base}, driverCoords, matchMask, result);
     return;
 }
 

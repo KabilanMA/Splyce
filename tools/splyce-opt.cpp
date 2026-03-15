@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
                   mlir::vector::VectorDialect>();
 
   // Register the pass so --splyce is visible on the CLI.
-  // mlir::registerCoIterVectorizePass();
+  mlir::registerCoIterVectorizePass();
 
   // Standard utility passes (CSE, canonicalize) useful for pre/post inspection.
   mlir::registerTransformsPasses();

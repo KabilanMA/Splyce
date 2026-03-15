@@ -1,0 +1,15 @@
+import os
+import lit.formats
+
+config.name = "Splyce"
+config.test_format = lit.formats.ShTest(True)
+config.suffixes = ['.mlir']
+
+config.test_source_root = "@CMAKE_CURRENT_SOURCE_DIR@"
+config.test_exec_root = "@CMAKE_CURRENT_BINARY_DIR@"
+
+splyce_opt = lit_config.params.get('coiter_opt', 'splyce-opt')
+filecheck = lit_config.params.get('filecheck', 'FileCheck')
+
+config.substitutions.append(('%splyce-opt', splyce_opt))
+config.substitutions.append(('%FileCheck', filecheck))

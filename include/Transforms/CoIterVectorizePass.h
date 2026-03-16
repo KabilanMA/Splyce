@@ -23,12 +23,10 @@ void populateCoIterVectorizePatterns(RewritePatternSet &patterns, unsigned vecto
 // call once at startup to make the pass available via CLI flag --splyce
 void registerCoIterVectorizePass();
 
-} // namespace mlir
 
 // generated base-class boilerplate from TableGen
 #define GEN_PASS_DECL_COITERVECTORIZE
-namespace mlir {
 #include "Transforms/Passes.h.inc"
-}
+} // namespace mlir
 
 #endif // TRANSFORMS_SPLYCE_VECTORIZE_PASS_H

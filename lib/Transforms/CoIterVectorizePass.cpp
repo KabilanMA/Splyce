@@ -71,6 +71,7 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
         // emit vectorized replacement
         rewriter.setInsertionPoint(whileOp);
         VectorLoopBuilder builder(desc, vectorWidth, rewriter);
+        return success(); // remove this. This is only here for debugging
         builder.build(whileOp.getLoc());
 
         // erase original

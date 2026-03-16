@@ -7,7 +7,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
-#define DEBUG_TYPE "splyce-match"
+#define DEBUG_TYPE "splyce-vectorize"
 
 using namespace mlir;
 using namespace mlir::splyce;
@@ -116,6 +116,7 @@ static void collectEqLeaves(Value v, llvm::SmallVectorImpl<arith::CmpIOp> &out) 
         if (cmp.getPredicate() == arith::CmpIPredicate())
             out.push_back(cmp);
     }
+    return;
 }
 
 // matchDoBlock
@@ -131,12 +132,21 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         auto load = dyn_cast<memref::LoadOp>(&op);
         if (!load || !load.getType().isIndex() || load.getIndices().size() != 1) 
             continue;
+        // LLVM_DEBUG(llvm::dbgs() << "Load Found: " << load << "\n");
         Value idx = load.getIndices()[0];
+        // LLVM_DEBUG(llvm::dbgs() << "Load index: " << idx << "\n");
         for (auto &sd : desc.streams) {
             unsigned pos = static_cast<unsigned>(&sd - desc.streams.data());
-            if (idx == sd.iterVar && !coordLoads[pos]) {
+            // LLVM_DEBUG(llvm::dbgs() << "StreamDescriptor.iterVar: " << sd.iterVar << "\n");
+            
+            Value expectedDoBlockArg = doBlock.getArgument(sd.argIndex);
+            // LLVM_DEBUG(llvm::dbgs() << "Condition (idx == expectedDoBlockArg) = " << (idx == expectedDoBlockArg) << "\n");
+            // LLVM_DEBUG(llvm::dbgs() << "Condition (!coordLoads[pos]) = " << (!coordLoads[pos]) << "\n");
+            if (idx == expectedDoBlockArg && !coordLoads[pos]) {
+                // LLVM_DEBUG(llvm::dbgs() << "Match!\n");
                 // argIndex might exceed N if there are non-stream iter vars
                 // guard with the stream index instead
+                // LLVM_DEBUG(llvm::dbgs() << "Loaded Coord: " << load.getResult() << "\n");
                 coordLoads[pos] = load;
                 sd.loadedCoord = load.getResult();
                 sd.coordsMemref = load.getMemRef();
@@ -160,6 +170,12 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         coordSet.insert(sd.loadedCoord);
     
     for (auto &op : doBlock) {
+        // The global minimum computation must precede the intersection check.
+        // Stop searching once we hit the scf.if to avoid incorrectly processing
+        // the arith.select ops used for pointer advances.
+        if (isa<scf::IfOp>(&op))
+            break;
+
         if (auto minui = dyn_cast<arith::MinUIOp>(&op)) {
             if (coordSet.count(minui.getLhs()) || coordSet.count(minui.getRhs()) || coordSet.count(globalMin)) {
                 globalMin = minui.getResult();
@@ -168,6 +184,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         } else if (auto sel = dyn_cast<arith::SelectOp>(&op)) {
             // select(cmp, a, b) where a and b are coords or prior min values
             if ((coordSet.count(sel.getTrueValue()) && coordSet.count(sel.getFalseValue())) || coordSet.count(globalMin)) {
+                // LLVM_DEBUG(llvm::dbgs() << "BINGO!\n");
                 globalMin = sel.getResult();
                 coordSet.insert(globalMin);
             }
@@ -188,17 +205,22 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         
         llvm::SmallVector<arith::CmpIOp, 4> eqLeaves;
         collectEqLeaves(ifOp.getCondition(), eqLeaves);
+        // LLVM_DEBUG(llvm::dbgs() << "Found " << eqLeaves.size() << " eq leaves\n");
         if (eqLeaves.size() != N) 
             continue;
         
         // every leaf must compare some coord_k against globalmin
         bool allMatch = llvm::all_of(eqLeaves, [&](arith::CmpIOp cmp){
+            // LLVM_DEBUG(llvm::dbgs() << "Checking " << (cmp.getLhs()) << "\nlhsIsCoord = " << (coordSet.count(cmp.getLhs()) != 0) << "\nrhsIsMin = " << (cmp.getRhs() == globalMin) << "\n");
+            // LLVM_DEBUG(llvm::dbgs() << "Global min: " << globalMin << "\n");
+            // LLVM_DEBUG(llvm::dbgs() << "cmp.getRhs(): " << cmp.getRhs() << "\n");
             bool lhsIsCoord = coordSet.count(cmp.getLhs()) != 0;
             bool rhsIsMin = (cmp.getRhs() == globalMin);
             return lhsIsCoord && rhsIsMin;
         });
 
         if (allMatch) {
+            // LLVM_DEBUG(llvm::dbgs() << "Found N-way match\n");
             matchIf = ifOp;
             break;
         }
@@ -220,7 +242,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
             if (!load.getType().isIndex() && load.getIndices().size() == 1) {
                 Value idx = load.getIndices()[0];
                 for (auto &sd : desc.streams) {
-                    if (idx == sd.iterVar && !sd.valsMemref) {
+                    if (idx == doBlock.getArgument(sd.argIndex) && !sd.valsMemref) {
                         sd.valsMemref = load.getMemRef();
                         if (!desc.elementType)
                             desc.elementType = load.getType();
@@ -260,7 +282,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
 
     for (auto &sd : desc.streams) {
         Value yielded = yieldOp.getResults()[sd.argIndex];
-        if (isDerivedFrom(yielded, sd.iterVar)) {
+        if (!isDerivedFrom(yielded, doBlock.getArgument(sd.argIndex))) {
             LLVM_DEBUG(llvm::dbgs() << "[Splyce] yield[" << sd.argIndex << "] not derived from its iter var\n");
             return false;
         }
@@ -286,12 +308,16 @@ std::optional<CoIterDescriptor> mlir::splyce::tryMatchCoIter(scf::WhileOp whileO
     Block &condBlock = whileOp.getBefore().front();
     Block &doBlock = whileOp.getAfter().front();
 
-    if (!matchConditionBlock(condBlock, desc)) 
+    if (!matchConditionBlock(condBlock, desc)) {
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] Could not match condition block\n");
         return std::nullopt;
-    if (!matchDoBlock(doBlock, desc)) 
+    }
+    if (!matchDoBlock(doBlock, desc)) {
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] Could not match do block\n");
         return std::nullopt;
+    }
 
-    LLVM_DEBUG(llvm::dbgs() << "[coiter] Matched " << desc.numStreams() << "-way co-iteration\n");
+    LLVM_DEBUG(llvm::dbgs() << "[Splyce] Matched " << desc.numStreams() << "-way co-iteration\n");
     return desc;
 }
 
@@ -305,8 +331,12 @@ bool mlir::splyce::isProfitable(const CoIterDescriptor &desc, float minDensity) 
     unsigned needed = desc.numStreams() * 2;
     unsigned fpOps = 0;
     for (Operation *op : desc.kernelOps) {
-        if (isa<arith::MulIOp, arith::AddFOp, arith::SubFOp, arith::DivFOp>(*op))
+        if (isa<arith::MulFOp, arith::AddFOp, arith::SubFOp, arith::DivFOp>(*op)) {
+            // LLVM_DEBUG(llvm::dbgs() << "Inside Op: " << *op << "\n");
             ++fpOps;
+        } else {
+            // LLVM_DEBUG(llvm::dbgs() << "Outside Op: " << *op << "\n");
+        }
     }
 
     if (fpOps < needed) {
@@ -316,4 +346,3 @@ bool mlir::splyce::isProfitable(const CoIterDescriptor &desc, float minDensity) 
 
     return true;
 }
-

@@ -9,6 +9,7 @@
 #define TRANSFORMS_SPLYCE_VECTOR_BUILDER_H
 
 #include "Transforms/CoIterPattern.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Location.h"
 #include "llvm/ADT/SmallVector.h"
@@ -35,9 +36,10 @@ public:
     VectorLoopBuilder(const CoIterDescriptor &desc, unsigned vectorWidth, OpBuilder &builder)
                     : desc(desc), W(vectorWidth), b(builder) {}
 
-  // Emit the complete vectorized scf.while loop at `builder`'s current insertion point.  
-  // Does not erase the original - the caller does that.
-  void build(Location loc);
+  // Emit the complete vectorized scf.while loop at `builder`'s current insertion point.
+  // Returns the created scf::WhileOp so the caller can yield its results from an
+  // enclosing scf.if branch. Does not erase the original - the caller does that.
+  scf::WhileOp build(Location loc);
 
 private:
     const CoIterDescriptor &desc;

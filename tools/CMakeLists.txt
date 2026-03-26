@@ -24,6 +24,12 @@ target_link_libraries(splyce-opt
     # Standard utility passes (--canonicalize, --cse, etc.) useful when
     # inspecting pre/post transformation IR by hand.
     MLIRTransforms
+
+    # Extra dialects needed to parse real sparsification output
+    # (e.g. mttkrp_scf.mlir produced by --sparsification-and-bufferization).
+    MLIRLLVMDialect
+    MLIRLinalgDialect
+    MLIRSparseTensorDialect
 )
 
 # Install the tool alongside mlir-opt so it can be used in CI pipelines

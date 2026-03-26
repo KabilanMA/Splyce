@@ -42,6 +42,8 @@ static bool matchConditionBlock(Block &condBlock, CoIterDescriptor &desc) {
     llvm::SmallVector<arith::CmpIOp, 4> ultLeaves;
     collectUltLeaves(condOp.getCondition(), ultLeaves);
 
+    // LLVM_DEBUG(llvm::dbgs() << "Found " << ultLeaves.size() << " ult leaves\n");
+
     if (ultLeaves.size() < 2) {
         LLVM_DEBUG(llvm::dbgs() << "[Splyce] Fewer than 2 ult leaves (" << ultLeaves.size() << ")\n");
         return false;
@@ -147,6 +149,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
                 // argIndex might exceed N if there are non-stream iter vars
                 // guard with the stream index instead
                 // LLVM_DEBUG(llvm::dbgs() << "Loaded Coord: " << load.getResult() << "\n");
+                // LLVM_DEBUG(llvm::dbgs() << "Loaded Coord: " << load.getMemRef() << "\n");
                 coordLoads[pos] = load;
                 sd.loadedCoord = load.getResult();
                 sd.coordsMemref = load.getMemRef();
@@ -184,8 +187,8 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         } else if (auto sel = dyn_cast<arith::SelectOp>(&op)) {
             // select(cmp, a, b) where a and b are coords or prior min values
             if ((coordSet.count(sel.getTrueValue()) && coordSet.count(sel.getFalseValue())) || coordSet.count(globalMin)) {
-                // LLVM_DEBUG(llvm::dbgs() << "BINGO!\n");
                 globalMin = sel.getResult();
+                // LLVM_DEBUG(llvm::dbgs() << "globalMin = " << globalMin << "\n");
                 coordSet.insert(globalMin);
             }
         }
@@ -239,6 +242,8 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
     // we identify a float load as belonging to stream k if its index operand equal stream k's iterVar
     for (auto &op : ifBody) {
         if (auto load = dyn_cast<memref::LoadOp>(&op)) {
+            // LLVM_DEBUG(llvm::dbgs() << "Load Found: " << load << "\n");
+            // LLVM_DEBUG(llvm::dbgs() << "Load indices count: " << load.getIndices().size() << "\n");
             if (!load.getType().isIndex() && load.getIndices().size() == 1) {
                 Value idx = load.getIndices()[0];
                 for (auto &sd : desc.streams) {
@@ -305,6 +310,21 @@ std::optional<CoIterDescriptor> mlir::splyce::tryMatchCoIter(scf::WhileOp whileO
         return std::nullopt;
     }
 
+    // Innermost check: reject if any scf.while is nested inside this loop's regions.
+    // We only vectorize the innermost co-iteration; outer loops are left scalar.
+    bool hasNestedLoop = false;
+    for (Region &region : whileOp->getRegions()) {
+        region.walk([&](Operation *op) {
+            if (isa<scf::WhileOp, scf::ForOp>(op))
+                hasNestedLoop = true;
+        });
+        if (hasNestedLoop) break;
+    }
+    if (hasNestedLoop) {
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] Not innermost loop - skipping\n");
+        return std::nullopt;
+    }
+
     Block &condBlock = whileOp.getBefore().front();
     Block &doBlock = whileOp.getAfter().front();
 
@@ -327,8 +347,9 @@ bool mlir::splyce::isProfitable(const CoIterDescriptor &desc, float minDensity) 
         return false;
     }
 
-    // require atleast N*2 FP-ops: N-way shuffle costs more than 2-way
-    unsigned needed = desc.numStreams() * 2;
+    // Require at least N FP-ops (one multiply per stream is the minimum useful
+    // kernel; MTTKRP has exactly 3 FP-ops for N=2 which passes N*1 but not N*2).
+    unsigned needed = desc.numStreams();
     unsigned fpOps = 0;
     for (Operation *op : desc.kernelOps) {
         if (isa<arith::MulFOp, arith::AddFOp, arith::SubFOp, arith::DivFOp>(*op)) {

@@ -63,7 +63,18 @@ def CoIterVectorize : Pass<"splyce"> {
 
     Option<"enableTailScalarFallback", "tail-scalar-fallback", "bool",
            /*default=*/"true",
-           "Emit a scalar epilogue for the remainder when nnz % W != 0">
+           "Emit a scalar epilogue for the remainder when nnz % W != 0">,
+
+    Option<"runtimeDensityThreshold", "runtime-density-threshold", "float",
+           /*default=*/"0.5f",
+           "Runtime fiber density threshold (0.0–1.0). Fibers whose nnz/dim "
+           "exceeds this value take the vector path; sparser fibers fall back "
+           "to the original scalar co-iteration. Tune per-workload.">,
+
+    Option<"targetFunction", "target-function", "std::string",
+           /*default=*/"\"\"",
+           "Only transform scf.while loops inside this named function. "
+           "Empty string (default) matches loops in all functions.">
   ];
 
   let constructor = "mlir::createCoIterVectorizePass()";

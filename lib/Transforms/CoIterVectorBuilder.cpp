@@ -36,7 +36,7 @@ using namespace mlir::splyce;
 //     scf.yield %new_i, %new_j
 //   }
 
-void VectorLoopBuilder::build(Location loc) {
+scf::WhileOp VectorLoopBuilder::build(Location loc) {
     ImplicitLocOpBuilder ib(loc, b);
     const unsigned N = desc.numStreams();
 
@@ -77,12 +77,19 @@ void VectorLoopBuilder::build(Location loc) {
     }
 
     // vectorized scf.while
-    ib.create<scf::WhileOp>(
+    // Capture the created op so the caller can wire its results into the
+    // enclosing scf.if yield (Option 3 density-aware dispatch).
+    auto vecWhile = ib.create<scf::WhileOp>(
         TypeRange(iterTypes),
         ValueRange(initVals),
 
         // condition block - all N pointers still in bounds
         [&](OpBuilder & condB, Location condLoc, ValueRange args) {
+            // Sync the shared outer builder so any helper that uses this->b
+            // emits into the condition block (not the outer then-block).
+            OpBuilder::InsertionGuard condGuard(this->b);
+            this->b.restoreInsertionPoint(condB.saveInsertionPoint());
+
             ImplicitLocOpBuilder cb(condLoc, condB);
             // build AND-tree of N "cmpi ult" ops
             Value cond;
@@ -97,6 +104,12 @@ void VectorLoopBuilder::build(Location loc) {
 
         // do block
         [&](OpBuilder & doB, Location doLoc, ValueRange args) {
+            // Sync the shared outer builder so helper methods (emitValidityMasks,
+            // emitMaskedLoads, etc.) emit into the do-block, not the outer
+            // then-block.  The guard restores the outer point when we return.
+            OpBuilder::InsertionGuard doGuard(this->b);
+            this->b.restoreInsertionPoint(doB.saveInsertionPoint());
+
             ImplicitLocOpBuilder db(doLoc, doB);
 
             // collect current pointers from block args
@@ -125,6 +138,8 @@ void VectorLoopBuilder::build(Location loc) {
 
             db.create<scf::YieldOp>(ValueRange(newPtrs));
         });
+
+    return vecWhile;
 }
 
 // Step 1+2 - Validity masks
@@ -265,7 +280,29 @@ Value VectorLoopBuilder::emitVectorKernel(Location loc, Value vaVec, llvm::Array
             if (it != scalarToVector.end()) {
                 newOperands.push_back(it->second);
             } else if (isa<FloatType>(operand.getType())) {
-                // Broadcasr scalar constants into a vector
+                // Only broadcast values defined OUTSIDE the original while loop
+                // (e.g. outer-loop scalars, function arguments, constants).
+                // Values defined inside the while's own regions (e.g. a
+                // read-modify-write accumulator load inside the kernel's scf.if)
+                // cannot be referenced from the new vector while's do-block and
+                // must be skipped to avoid cross-region domination violations.
+                Operation *defOp = operand.getDefiningOp();
+                // Walk parent chain to detect ops nested inside the while's body.
+                // (WhileOp::getOperation() is non-const so we go through parents.)
+                bool insideWhile = false;
+                if (defOp) {
+                    for (Operation *p = defOp->getParentOp(); p; p = p->getParentOp()) {
+                        if (p == const_cast<scf::WhileOp &>(desc.whileOp).getOperation()) {
+                            insideWhile = true;
+                            break;
+                        }
+                    }
+                }
+                if (insideWhile) {
+                    allMapped = false;
+                    break;
+                }
+                // Broadcast scalar constants into a vector
                 newOperands.push_back(b.create<vector::BroadcastOp>(vecF(), operand));
             } else {
                 allMapped = false;
@@ -325,8 +362,13 @@ llvm::SmallVector<Value, 4> VectorLoopBuilder::emitFrontierAdvance(Location loc,
     for (unsigned k = 0; k < N; ++k) {
         Value le = b.create<arith::CmpIOp>(arith::CmpIPredicate::ule, coords[k], frontierV);
         Value advMask = b.create<arith::AndIOp>(le, masks[k]);
-        Value advVec = b.create<arith::ExtUIOp>(vecIdx(), advMask);
-        Value adv = b.create<vector::ReductionOp>(vector::CombiningKind::ADD, advVec);
+        // Extend i1 → i64 (not → index): arith.extui fold hooks assume an
+        // IntegerType result, which 'index' is not.  Reduce to i64 first, then
+        // cast to index.
+        auto vecI64 = VectorType::get({W}, b.getI64Type());
+        Value advVec  = b.create<arith::ExtUIOp>(vecI64, advMask);
+        Value adv64   = b.create<vector::ReductionOp>(vector::CombiningKind::ADD, advVec);
+        Value adv     = b.create<arith::IndexCastOp>(b.getIndexType(), adv64);
         newPtrs[k] = b.create<arith::AddIOp>(ptrs[k], adv);
     }
     

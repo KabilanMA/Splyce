@@ -18,6 +18,8 @@ include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
 
+add_definitions(${LLVM_DEFINITIONS})
+
 # 4. Include directories
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})

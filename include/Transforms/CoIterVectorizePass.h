@@ -2,6 +2,7 @@
 #define TRANSFORMS_SPLYCE_VECTORIZE_PASS_H
 
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/StringRef.h"
 #include <memory>
 
 namespace mlir {
@@ -12,12 +13,17 @@ class MLIRContext;
 
 // pass factory
 // default arguments match the TableGen option defaults
-std::unique_ptr<Pass> createCoIterVectorizePass(unsigned vectorWidth = 8, float minDensity = 0.0f, bool tailFallback = true);
+std::unique_ptr<Pass> createCoIterVectorizePass(unsigned vectorWidth = 8, float minDensity = 0.0f,
+                                                bool tailFallback = true,
+                                                float runtimeDensityThreshold = 0.5f,
+                                                llvm::StringRef targetFunction = "");
 
 // pattern population
 // exposed separately so the patterns can be used inside other passes or
 // combined with additional rewrites in a larger pipeline.
-void populateCoIterVectorizePatterns(RewritePatternSet &patterns, unsigned vectorWidth, float minDensity);
+void populateCoIterVectorizePatterns(RewritePatternSet &patterns, unsigned vectorWidth,
+                                     float minDensity, float runtimeDensityThreshold = 0.5f,
+                                     llvm::StringRef targetFunction = "");
 
 // pass registration
 // call once at startup to make the pass available via CLI flag --splyce

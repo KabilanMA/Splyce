@@ -122,19 +122,20 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
 
         // The coiteration coordinate indexes the last dimension of the output
         // (e.g. dim 0 for 1-D outputs, dim 1 for the 2-D MTTKRP output).
-        unsigned outRank =
-            cast<MemRefType>(desc.outputMemref.getType()).getRank();
+        unsigned outRank = cast<MemRefType>(desc.outputMemref.getType()).getRank();
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] outRank=" << outRank << "\n");
         Value cCoordDim = arith::ConstantIndexOp::create(rewriter, loc, outRank - 1);
-        Value dimSize   = memref::DimOp::create(rewriter, loc, desc.outputMemref, cCoordDim);
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] cCoordDim=" << cCoordDim << "\n");
+        Value dimSize = memref::DimOp::create(rewriter, loc, desc.outputMemref, cCoordDim);
+        LLVM_DEBUG(llvm::dbgs() << "[Splyce] dimSize=" << dimSize << "\n");
 
-        unsigned thresholdPct =
-            static_cast<unsigned>(runtimeDensityThreshold * 100.0f + 0.5f);
-        Value cHundred      = arith::ConstantIndexOp::create(rewriter, loc, 100);
+
+        unsigned thresholdPct = static_cast<unsigned>(runtimeDensityThreshold * 100.0f + 0.5f);
+        Value cHundred = arith::ConstantIndexOp::create(rewriter, loc, 100);
         Value cThresholdPct = arith::ConstantIndexOp::create(rewriter, loc, thresholdPct);
-        Value nnzScaled     = arith::MulIOp::create(rewriter, loc, nnz, cHundred);
-        Value dimScaled     = arith::MulIOp::create(rewriter, loc, dimSize, cThresholdPct);
-        Value isDense       = arith::CmpIOp::create(rewriter, loc,
-                                  arith::CmpIPredicate::uge, nnzScaled, dimScaled);
+        Value nnzScaled = arith::MulIOp::create(rewriter, loc, nnz, cHundred);
+        Value dimScaled = arith::MulIOp::create(rewriter, loc, dimSize, cThresholdPct);
+        Value isDense = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::uge, nnzScaled, dimScaled);
 
         // ── scf.if dispatch ─────────────────────────────────────────────────
         //

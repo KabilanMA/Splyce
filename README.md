@@ -1,236 +1,160 @@
 # Splyce (Slicing Sparse Data)
 
-```bash
-mlir-opt spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-elementwise-ops --linalg-generalize-named-ops --pre-sparsification-rewrite --pre-sparsification-rewrite --empty-tensor-to-alloc-tensor --sparse-reinterpret-map --sparsification="parallelization-strategy=dense-outer-loop" --stage-sparse-ops --lower-sparse-ops-to-foreach --sparse-reinterpret-map --lower-sparse-foreach-to-scf --loop-invariant-code-motion --sparse-tensor-conversion -o temp.mlir
-```
+Splyce is an out-of-tree MLIR project featuring a custom pass (`--splyce`) designed to recognize and vectorize N-way co-iteration loops (`scf.while`). By replacing branchy, un-vectorizable scalar epilogues with SIMD fast-lane execution paths, Splyce accelerates sparse tensor computations (like SpGEMM and MTTKRP).
 
-```bash
-mlir-opt spgemm_splyce.mlir --sparsification-and-bufferization --sparse-storage-specifier-to-llvm --canonicalize --convert-linalg-to-loops --convert-vector-to-scf --expand-realloc --convert-scf-to-openmp --convert-scf-to-cf --expand-strided-metadata --lower-affine --convert-vector-to-llvm --convert-complex-to-standard --arith-expand --convert-math-to-llvm --convert-complex-to-libm --convert-vector-to-llvm --convert-openmp-to-llvm --convert-to-llvm -o spgemm_llvm.mlir
-```
-To translate Sparse Dialect code into SCF loops use the follows command:
-
-`mlir-opt sparse_mttkrp.mlir --sparsification-and-bufferization --sparse-vectorization="vl=4" -o scf_loops.mlir`
-
-To translate the generated SCF+Vector loop into LLVM dialect use the following command:
-
-```
-mlir-opt scf_loops.mlir \
-  --canonicalize \
-  --cse \
-  --loop-invariant-code-motion \
-  --lower-vector-mask \
-  --convert-vector-to-scf \
-  --canonicalize \ 
-  --cse \
-  --expand-realloc \
-  --sparse-storage-specifier-to-llvm \
-  --convert-linalg-to-loops \
-  --lower-affine \
-  --canonicalize \
-  --cse \
-  --convert-scf-to-cf \
-  --expand-strided-metadata \
-  --finalize-memref-to-llvm \
-  --convert-vector-to-llvm="enable-x86vector=1" \
-  --convert-math-to-llvm \
-  --convert-arith-to-llvm \
-  --convert-func-to-llvm \
-  --convert-cf-to-llvm \
-  --reconcile-unrealized-casts   
-  -o llvm_dialect.mlir
-```
-
-To translate a sparse dialect program directly into LLVM IR use the following command:
-
-`mlir-opt sparse_mttkrp.mlir --sparsifier | mlir-translate --mlir-to-llvmir -o mttkrp.ll`
-
-`clang -O3 mttkrp.ll   -L"/home/kabilan/llvm-dev/lib"   -lmlir_c_runner_utils   -lmlir_runner_utils   -Wl,-rpath,"/home/kabilan/llvm-dev/lib"   -o mttkrp_benchmark`
-
-## Questions to Answer
-
-1. Why not use a BlockSparse encoding?
-
-    - It's the wrong abstraction for tensors other than 2D. BSR is a 2D matrix format -- `(d0 floordiv B, d1 floordiv B, d0 mod B, d1 mod B)`. There is no block dimension to exploit. The encoding simply doesnn't apply.
-    - It moves the intersection problem, not solves it. The scalar `scf.while` co-iteration loop reappears at the block-coordinate level. We still get the same branchy, un-vectorizable pointer-chasing, just a coarser granularity. The fundamental issue is untouched.
-    - It introduces phantom nonzeros. Coordinates in our `.tns` file are arbitrary. Forcing them into fixed-size blocks requires storing zeros that don't exist in the original data, inflating memory and bandwidth for no computational gain.
-
-2. What are the conditions under which BlockSparse will be beneficial compared to this vectorization?
-
-For this, the data is natually block-structured. If real nonzeros cluster into BxB tiles with >50% density inside each tile, fill-in is cheap and the dense inner dimension give the auto-vectorizer free SIMD.
-
-3. What are the condiions that direct sparse dialect will be beneficial comparared to this vectorization?
-
-
-cmake -G Ninja .. -DMLIR_DIR=/home/kabilan/llvm-dev/lib/cmake/mlir
-ninja
-./bin/splyce-opt --splyce="vector-width=8" --debug-only=splyce-vectorize ../test/coiter_scf.mlir -o /dev/null
-
-## Building and Running the CoIter Vectorize Pass
-#### ════════════════════════════════════════════════
-
-This guide covers two paths:
-1. Build LLVM+MLIR from source  (required if you don't have an install)
-2. Use a pre-built LLVM install (faster, skip to "Build the pass")
-
-Tested against LLVM 23.0.0.  The pass uses no deprecated APIs so it should work on any LLVM >= 23.0.0git.
-#### ════════════════════════════════════════════════
-
-
-### Prerequisites
 ---
 
-#### Ubuntu / Debian
-Note: clang and lld are installed to serve as a fast host compiler/linker to bootstrap the MLIR build and to compile the Splyce pass later.
+## Building and Installation
 
+Tested against LLVM 23.0.0 (but it should work on any LLVM >= 23.0.0git).
+
+### Prerequisites
+
+**Ubuntu / Debian:**
 ```bash
-sudo apt-get install -y \
-  cmake ninja-build clang lld \
-  python3 python3-pip \
-  git zlib1g-dev
+sudo apt-get install -y cmake ninja-build clang lld python3 python3-pip git zlib1g-dev
 ```
-
-#### macOS (Homebrew)
+**macOS (Homebrew):**
 ```zsh
 brew install cmake ninja llvm python3
 ```
-
-#### RHEL / Fedora
+**Fedora / RHEL:**
 ```bash
 sudo dnf install -y cmake ninja-build clang lld python3 git zlib-devel
 ```
 
-### PATH A — Build LLVM + MLIR from source
+### 1. LLVM & MLIR Setup
 
-__(Skip to PATH B if you already have an MLIR install with cmake files)__
+You can either build LLVM from source or use a pre-built installation.
 
+**PATH A - Build from Source (Recommended)**
 ```bash
 git clone --depth=1 https://github.com/llvm/llvm-project.git
 cd llvm-project
-```
-#### Configure.
-
--DLLVM_ENABLE_PROJECTS="mlir" — build MLIR alongside LLVM core
--DLLVM_TARGETS_TO_BUILD="X86" — only native target; add AArch64/RISCV as needed
--DLLVM_ENABLE_ASSERTIONS=ON   — required for MLIR pattern matching debug output
--DCMAKE_BUILD_TYPE=Release    — use RelWithDebInfo if you want debuggable IR
-
-```bash
-cmake -S llvm -B build \
-  -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DLLVM_ENABLE_PROJECTS="mlir" \
-  -DLLVM_TARGETS_TO_BUILD="X86" \
-  -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DLLVM_INSTALL_UTILS=ON \
+cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DLLVM_ENABLE_PROJECTS="mlir" -DLLVM_TARGETS_TO_BUILD="X86" \
+  -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_INSTALL_UTILS=ON \
   -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
-```
-
-#### Build and install (takes ~20–40 min on a 16-core machine).
-```bash
 ninja -C build install
-```
 
-#### Set shell variables used throughout the rest of this guide.
-```bash
 export LLVM_INSTALL=$HOME/llvm-install
 export PATH=$LLVM_INSTALL/bin:$PATH
-
-cd ..   # back to your workspace root
 ```
 
-### PATH B — Use a pre-built LLVM install
+**PATH B - Pre-built Install (Faster)**
+If your OS provides MLIR cmake files (e.g., Ubuntu 22.04+ or macOS):
+*   **Ubuntu:** `sudo apt-get install llvm-19-dev mlir-19-tools libmlir-19-dev`
+*   **macOS:** `brew install llvm`
 
-If your distro ships MLIR cmake files (Ubuntu 22.04+ with llvm-XX-dev):
+*(Make sure to export `LLVM_INSTALL` to your installation directory and add it to your `PATH`).*
 
-Ubuntu / Debian:
+### 2. Build the Splyce Pass
 ```bash
-sudo apt-get install llvm-19-dev mlir-19-tools libmlir-19-dev
-export LLVM_INSTALL=/usr/lib/llvm-XX
-export PATH=$LLVM_INSTALL/bin:$PATH
-```
-
-Homebrew (macOS):
-```zsh
-brew install llvm
-export LLVM_INSTALL=$(brew --prefix llvm)
-export PATH=$LLVM_INSTALL/bin:$PATH
-```
-
-#### Verify the install exposes cmake files:
-```bash
-ls $LLVM_INSTALL/lib/cmake/mlir/MLIRConfig.cmake   # must exist
-ls $LLVM_INSTALL/lib/cmake/llvm/LLVMConfig.cmake   # must exist
-```
-
----
-### Build the pass
----
-
-Clone or enter the project directory. (If you received the files directly, just cd into them.)
-
-```bash
-cd splyce
-```
-
-#### Configure.
-```bash
-cmake -S . -B build \
-  -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
+# Run inside the Splyce repository root
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
   -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir \
   -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm
-```
-
-#### Build everything: the library, coiter-opt, and register tests.
-```bash
 ninja -C build
-
-# Verify the tool was built.
+```
+Verify it built correctly:
+```bash
 ./build/bin/splyce-opt --help | grep splyce
-# Expected output:
-#   --splyce - Vectorize scf.while co-iteration loops using Vector dialect
 ```
 
+---
 
-### Run the pass on the example file
+## End-to-End Compilation Pipelines
 
-#### Print the transformed IR to stdout for human inspection.
+The following examples demonstrate compiling Sparse Dialect structures all the way to LLVM IR executable benchmarks, inserting the `splyce-opt` vectorization pass in the middle of the pipeline.
 
+### Single-Threaded Compilation (e.g., SpGEMM)
+
+**1. SparseTensor -> SCF**
 ```bash
-./build/bin/splyce-opt \
-  "--splyce=target-function=mttkrp_kernel" \
-  --debug-only=splyce-vectorize \
-  ./playground/spgemm_scf.mlir
+mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-elementwise-ops \
+  --linalg-generalize-named-ops --pre-sparsification-rewrite \
+  --pre-sparsification-rewrite --empty-tensor-to-alloc-tensor --sparse-reinterpret-map \
+  --sparsification --stage-sparse-ops --lower-sparse-ops-to-foreach \
+  --sparse-reinterpret-map --lower-sparse-foreach-to-scf --loop-invariant-code-motion \
+  --sparse-tensor-conversion -o ./playground/spgemm_scf.mlir
 ```
 
-Remove the `--debug-only=splyce-vectorize` to avoid debug output.
-
-
-#### Dump to a file for further lowering.
-
+**2. Splyce Vectorization (SCF -> Vectorized SCF)**
 ```bash
-./build/bin/splyce-opt \
-  "--splyce=target-function=mttkrp_kernel" \
-  --debug-only=splyce-vectorize \
-  ./playground/spgemm_scf.mlir
-  -o /tmp/coiter_vec_out.mlir
-
-cat /tmp/coiter_vec_out.mlir
+./build/bin/splyce-opt ./playground/spgemm_scf.mlir --splyce="vector-width=4" -o ./playground/spgemm_splyce.mlir
 ```
 
-#### All possible cmd arguments for the pass.
+**3. SCF -> LLVM Dialect**
 ```bash
-./build/bin/splyce-opt --splyce="vector-width=8 min-density=0.1 target-function=spgemm" input.mlir
-
+mlir-opt spgemm_splyce.mlir --canonicalize --cse --loop-invariant-code-motion \
+  --one-shot-bufferize="bufferize-function-boundaries=true allow-return-allocs-from-loops=true" \
+  --convert-bufferization-to-memref --lower-vector-mask --convert-vector-to-scf \
+  --canonicalize --cse --expand-realloc --sparse-storage-specifier-to-llvm \
+  --convert-linalg-to-loops --lower-affine --canonicalize --cse --convert-scf-to-cf \
+  --expand-strided-metadata --finalize-memref-to-llvm \
+  --convert-vector-to-llvm="enable-x86vector=1" --convert-math-to-llvm \
+  --convert-arith-to-llvm --convert-func-to-llvm --convert-cf-to-llvm \
+  --reconcile-unrealized-casts -o spgemm_llvm_splyce.mlir
 ```
-<!-- # 3. Enable debug output to see why patterns are (or are not) matching.
-./build/bin/splyce-opt \
-  --splyce="vector-width=8" \
-  --mlir-print-ir-after-all \
-  --debug-only=splyce-vectorize \
-  test/coiter_scf.mlir -->
 
+**4. Binary Generation**
+```bash
+mlir-translate spgemm_llvm_splyce.mlir --mlir-to-llvmir -o spgemm_splyce.ll
+
+clang -O3 spgemm_splyce.ll -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize  -L"$LLVM_INSTALL_DIR/lib"   -lmlir_c_runner_utils   -lmlir_runner_utils   -Wl,-rpath,"$LLVM_INSTALL_DIR/lib"   -o test_benchmark_spgemm_splyce
+```
+
+### Multi-Threaded Compilation (e.g., MTTKRP)
+
+**1. SparseTensor -> SCF (Parallel)**
+```bash
+mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-elementwise-ops \
+  --linalg-generalize-named-ops --pre-sparsification-rewrite \
+  --pre-sparsification-rewrite --empty-tensor-to-alloc-tensor --sparse-reinterpret-map \
+  --sparsification="parallelization-strategy=dense-outer-loop" --stage-sparse-ops \
+  --lower-sparse-ops-to-foreach --sparse-reinterpret-map --lower-sparse-foreach-to-scf \
+  --loop-invariant-code-motion --sparse-tensor-conversion -o ./playground/spgemm_scf_parallel.mlir
+```
+
+**2. Splyce Vectorization**
+```bash
+./build/bin/splyce-opt ./playground/spgemm_scf_parallel.mlir --splyce="vector-width=4" -o ./playground/spgemm_splyce_parallel.mlir
+```
+
+**3. SCF -> LLVM Dialect**
+```bash
+mlir-opt ./playground/spgemm_splyce_parallel.mlir --canonicalize --sparsification-and-bufferization \
+  --sparse-storage-specifier-to-llvm --canonicalize --convert-linalg-to-loops \
+  --convert-vector-to-scf --expand-realloc --convert-scf-to-openmp \
+  --convert-openmp-to-llvm --convert-scf-to-cf --expand-strided-metadata \
+  --lower-affine --convert-vector-to-llvm --convert-complex-to-standard \
+  --arith-expand --convert-math-to-llvm --convert-complex-to-libm \
+  --convert-vector-to-llvm --convert-to-llvm --reconcile-unrealized-casts \
+  -o ./playground/spgemm_llvm_splyce_parallel.mlir
+```
+
+**4. Binary Generation (with OpenMP & AVX512)**
+```bash
+mlir-translate ./playground/spgemm_llvm_splyce_parallel.mlir --mlir-to-llvmir -o ./playground/spgemm_llvm_splyce_parallel.ll
+
+clang -O3 ./playground/spgemm_llvm_splyce_parallel.ll -mavx512f -mavx512vl -fopenmp -fno-vectorize \
+  -fno-slp-vectorize -L"$LLVM_INSTALL/lib" -lmlir_c_runner_utils -lmlir_runner_utils \
+  -Wl,-rpath,"$LLVM_INSTALL/lib" -o test_benchmark_spgemm_splyce_parallel
+```
+
+---
+
+## FAQ
+
+**1. Why not use a BlockSparse encoding?**
+*   It's the wrong abstraction for tensors other than 2D. BSR is a 2D matrix format (`d0 floordiv B`, `d1 floordiv B`, `d0 mod B`, `d1 mod B`). There is no block dimension to exploit for generalized sparse tensors.
+*   It moves the intersection problem but does not solve it. The scalar `scf.while` co-iteration loop simply reappears at the block-coordinate level. We still get the same branchy, un-vectorizable pointer-chasing, just at a coarser granularity.
+*   It introduces phantom nonzeros. Coordinates in real datasets are arbitrary. Forcing them into fixed-size blocks requires storing zeros that don't exist in the original data, inflating memory and bandwidth for no computational gain.
+
+**2. Under what conditions is BlockSparse beneficial compared to this vectorization?**
+If the data is naturally block-structured. If real nonzeros cluster into `B x B` tiles with >50% density inside each tile, fill-in is cheap and the dense inner dimensions grant the auto-vectorizer free SIMD.
+
+**3. When is the direct sparse dialect beneficial compared to Splyce vectorization?**
+The Splyce vectorization is an optimization pass applied on top of the sparse dialect. If the density of nonzeros is extremely low, the shuffle and mask-matching overhead in the SIMD fast-lane may outweigh the scalar loop branching. In those rare scenarios, standard scalar sparse dialect lowering might yield better performance.

@@ -13,7 +13,7 @@
 using namespace mlir;
 using namespace mlir::splyce;
 
-// ─── file-local helpers ────────────────────────────────────────────────────────
+// file-local helpers
 
 // Binary-tree reduction of N scalar f64 values using arith.addf.
 // For N=4: addf(addf(v0,v1), addf(v2,v3)).
@@ -50,7 +50,7 @@ static Value binaryTreeSumIdx(Location loc, OpBuilder &b,
     return cur[0];
 }
 
-// ─── condition block ───────────────────────────────────────────────────────────
+// condition block
 
 // Condition: for each stream k, emit (ptr_k + W <= end_k), AND them all.
 // The W constant is emitted here (inside the block) so it reads like vec4.
@@ -70,7 +70,7 @@ void SimdFastLaneBuilder::emitCondition(Location loc, ValueRange args,
     cb.create<scf::ConditionOp>(cond, args);
 }
 
-// ─── do block ─────────────────────────────────────────────────────────────────
+// do block
 
 void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
                                     OpBuilder &doB) {
@@ -88,7 +88,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
             llvm::SmallVector<Attribute>(
                 W, ib.getFloatAttr(desc.elementType, 0.0))));
 
-    // ── Phase 1: Unmasked vector loads ────────────────────────────────────────
+    // Phase 1: Unmasked vector loads 
     // Condition guarantees >= W elements, so no mask is needed.
     // Order: A_coords, A_vals, B_coords, B_vals (per-stream: coord then val).
     llvm::SmallVector<Value, 4> allCoords(N), allVals(N);
@@ -99,7 +99,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
             vecF(), desc.streams[s].valsMemref, ValueRange{ptrs[s]});
     }
 
-    // ── Phase 2: Extract all scalar coordinates ───────────────────────────────
+    // Phase 2: Extract all scalar coordinates 
     // All A coords first, then all B coords (used for cross-compare and advance).
     // coordScalars[stream][lane]
     llvm::SmallVector<llvm::SmallVector<Value, 8>, 4> coordScalars(N);
@@ -110,7 +110,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
                 allCoords[s], ArrayRef<int64_t>{(int64_t)k}));
     }
 
-    // ── Phase 3: W×W cross-comparisons ────────────────────────────────────────
+    // Phase 3: W×W cross-comparisons 
     // For each driver (stream 0) lane k:
     //   row_k = cmpi eq, broadcast(a_coord[k]), b_coords   → vector<W x i1>
     llvm::SmallVector<Value, 8> rows(W);
@@ -121,7 +121,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
                                             aBcast, allCoords[1]);
     }
 
-    // ── Phase 4: Masked B-value selection + add-reduction per driver lane ─────
+    // Phase 4: Masked B-value selection + add-reduction per driver lane
     // select(row_k, b_vals, zero) collapses to a scalar matched B value
     // (0.0 when no element of B matches a_coord[k]; unique-coord assumption).
     llvm::SmallVector<Value, 8> bMatchVals(W);
@@ -131,7 +131,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
             vector::CombiningKind::ADD, bSel);
     }
 
-    // ── Phase 5: Extract all A values, then compute per-lane contributions ────
+    // Phase 5: Extract all A values, then compute per-lane contributions
     // All extracts first, then all multiplies — matches vec4 op ordering.
     llvm::SmallVector<Value, 8> aVals(W);
     for (unsigned k = 0; k < W; ++k)
@@ -142,14 +142,14 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
     for (unsigned k = 0; k < W; ++k)
         contribs[k] = ib.create<arith::MulFOp>(aVals[k], bMatchVals[k]);
 
-    // ── Phase 6: Binary-tree horizontal sum ───────────────────────────────────
-    // For W=4: addf(addf(c0,c1), addf(c2,c3))  — no intermediate vector.
+    // Phase 6: Binary-tree horizontal sum
+    // For W=4: addf(addf(c0,c1), addf(c2,c3))  - no intermediate vector.
     Value total = binaryTreeSumF(loc, doB, contribs);
 
-    // ── Phase 7: Accumulate ───────────────────────────────────────────────────
+    // Phase 7: Accumulate 
     Value newAcc = ib.create<arith::AddFOp>(args[desc.accArgIndex], total);
 
-    // ── Phase 8: Branchless scalar pointer advance ────────────────────────────
+    // Phase 8: Branchless scalar pointer advance
     // pivot = min over all streams of the last (largest) coord in the window.
     // The W >= 1 condition guarantees coordScalars[s][W-1] is valid.
     Value pivot = coordScalars[0][W - 1];
@@ -177,7 +177,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
         newPtrs[s] = ib.create<arith::AddIOp>(ptrs[s], step);
     }
 
-    // ── Yield ─────────────────────────────────────────────────────────────────
+    // Yield
     // Start from current args (non-stream, non-acc args pass through unchanged).
     llvm::SmallVector<Value> yieldVals(args.begin(), args.end());
     for (unsigned s = 0; s < N; ++s)
@@ -187,7 +187,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
     ib.create<scf::YieldOp>(ValueRange(yieldVals));
 }
 
-// ─── top-level entry ───────────────────────────────────────────────────────────
+// top-level entry
 
 scf::WhileOp SimdFastLaneBuilder::build(Location loc) {
     ImplicitLocOpBuilder ib(loc, b);
@@ -201,12 +201,12 @@ scf::WhileOp SimdFastLaneBuilder::build(Location loc) {
     return ib.create<scf::WhileOp>(
         iterTypes, initVals,
 
-        // ── Condition block ────────────────────────────────────────────────────
+        // Condition block
         [&](OpBuilder &condB, Location condLoc, ValueRange args) {
             emitCondition(condLoc, args, condB);
         },
 
-        // ── Do block ──────────────────────────────────────────────────────────
+        // Do block 
         [&](OpBuilder &doB, Location doLoc, ValueRange args) {
             emitBody(doLoc, args, doB);
         });

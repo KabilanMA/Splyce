@@ -36,7 +36,7 @@ namespace mlir {
 using namespace mlir;
 using namespace mlir::splyce;
 
-// ─── rewrite pattern ──────────────────────────────────────────────────────────
+// rewrite pattern
 
 // Matches an scf.while as a co-iteration loop and rewrites it into:
 //   (1) A SIMD fast-lane scf.while (W-wide, unmasked, branchless).
@@ -78,11 +78,11 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
 
         rewriter.setInsertionPoint(whileOp);
 
-        // ── (1) SIMD fast-lane ────────────────────────────────────────────────
+        // (1) SIMD fast-lane
         SimdFastLaneBuilder simdBuilder(desc, vectorWidth, rewriter);
         scf::WhileOp simdWhile = simdBuilder.build(loc);
 
-        // ── (2) Scalar epilogue ───────────────────────────────────────────────
+        // (2) Scalar epilogue
         // Clone the original while verbatim, then patch its init operands to
         // start from where the SIMD loop stopped.  The attribute prevents the
         // greedy driver from re-applying this transformation to the clone.
@@ -103,7 +103,7 @@ private:
     std::string targetFunction;
 };
 
-// ─── pass ─────────────────────────────────────────────────────────────────────
+// pass
 
 namespace {
 
@@ -127,7 +127,7 @@ struct CoIterVectorizePass
 
 } // namespace
 
-// ─── public API ───────────────────────────────────────────────────────────────
+// public API
 
 void mlir::populateCoIterVectorizePatterns(RewritePatternSet &patterns,
                                            unsigned vectorWidth,

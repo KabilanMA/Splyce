@@ -12,7 +12,7 @@
 using namespace mlir;
 using namespace mlir::splyce;
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 // Recursively collect `cmpi ult` leaves from a left-associative AND-tree:
 //   andi(andi(andi(cmp0, cmp1), cmp2), cmp3)
@@ -55,7 +55,7 @@ static bool isDerivedFrom(Value v, BlockArgument target) {
     return false;
 }
 
-// ─── condition block ───────────────────────────────────────────────────────────
+// condition block
 
 // Extract N StreamDescriptors — one per `cmpi ult` leaf in the AND-tree.
 // Fills iterVar, end, and argIndex; coordsMemref / valsMemref / loadedCoord
@@ -97,12 +97,12 @@ static bool matchConditionBlock(Block &condBlock, CoIterDescriptor &desc) {
     return true;
 }
 
-// ─── do block ─────────────────────────────────────────────────────────────────
+// do block 
 
 static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
     const unsigned N = desc.numStreams();
 
-    // ── (3) Find N index-typed coordinate loads, one per stream ───────────────
+    // (3) Find N index-typed coordinate loads, one per stream
     llvm::SmallVector<memref::LoadOp, 4> coordLoads(N);
     unsigned matched = 0;
     for (auto &op : doBlock) {
@@ -129,7 +129,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // ── (4) Find the global minimum over all N loaded coordinates ─────────────
+    // (4) Find the global minimum over all N loaded coordinates
     // Accept chains of arith.minui or arith.select that reference all N coords.
     // Stop at the first scf.if to avoid confusing pointer-advance selects.
     Value globalMin;
@@ -160,7 +160,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // ── (5) Find the scf.if whose condition is AND of N "cmpi eq, coord, min" ─
+    // (5) Find the scf.if whose condition is AND of N "cmpi eq, coord, min" 
     scf::IfOp matchIf;
     for (auto &op : doBlock) {
         auto ifOp = dyn_cast<scf::IfOp>(&op);
@@ -185,7 +185,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // ── (6) Find value loads in the scf.if true-block ─────────────────────────
+    // (6) Find value loads in the scf.if true-block 
     // Each stream contributes one float-typed load indexed by its do-block arg.
     Block &ifBody = matchIf.getThenRegion().front();
     for (auto &op : ifBody) {
@@ -210,7 +210,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         }
     }
 
-    // ── (6 cont.) Detect loop-carried accumulator ─────────────────────────────
+    // (6 cont.) Detect loop-carried accumulator
     // The scf.if must yield a float result that appears as a non-index value
     // in the do-block's scf.yield (acc += kernel(...) pattern).
     if (matchIf.getNumResults() == 0) {
@@ -234,7 +234,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
     LLVM_DEBUG(llvm::dbgs() << "[Splyce] Detected loop-carried accumulator at argIndex="
                             << desc.accArgIndex << "\n");
 
-    // ── (7) Verify the scf.yield advances each stream iter var ────────────────
+    // (7) Verify the scf.yield advances each stream iter var
     if (yieldOp.getResults().size() < N) {
         LLVM_DEBUG(llvm::dbgs() << "[Splyce] yield has fewer results than streams\n");
         return false;
@@ -250,7 +250,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
     return true;
 }
 
-// ─── public API ───────────────────────────────────────────────────────────────
+// public API
 
 std::optional<CoIterDescriptor> mlir::splyce::tryMatchCoIter(
     scf::WhileOp whileOp) {

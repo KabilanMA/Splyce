@@ -1,4 +1,6 @@
 build/
 .vscode/
 
-**/**.llvm.**
+
+**/**.ll
+**/**.tns

@@ -13,7 +13,7 @@ add_mlir_library(CoIterVectorizeTransforms
 
   # ── Sources ──────────────────────────────────────────────────────────────────
   CoIterPattern.cpp
-  CoIterVectorBuilder.cpp
+  SimdFastLaneBuilder.cpp
   CoIterVectorizePass.cpp
 
   # ── Generated header dependency ───────────────────────────────────────────────

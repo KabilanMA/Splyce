@@ -7,32 +7,28 @@
 
 namespace mlir {
 
-// Forward declaration - avoid pulling in full dialect headers here
 class RewritePatternSet;
-class MLIRContext;
 
-// pass factory
-// default arguments match the TableGen option defaults
-std::unique_ptr<Pass> createCoIterVectorizePass(unsigned vectorWidth = 8, float minDensity = 0.0f,
-                                                bool tailFallback = true,
-                                                float runtimeDensityThreshold = 0.5f,
-                                                llvm::StringRef targetFunction = "");
+// Creates the co-iteration vectorization pass.
+// vectorWidth   : SIMD lane count W (default 8).
+// targetFunction: only transform loops inside this function name ("" = all).
+std::unique_ptr<Pass> createCoIterVectorizePass(
+    unsigned vectorWidth = 4, llvm::StringRef targetFunction = "");
 
-// pattern population
-// exposed separately so the patterns can be used inside other passes or
-// combined with additional rewrites in a larger pipeline.
-void populateCoIterVectorizePatterns(RewritePatternSet &patterns, unsigned vectorWidth,
-                                     float minDensity, float runtimeDensityThreshold = 0.5f,
+// Adds the co-iteration vectorization rewrite pattern to an existing set.
+// Exposed separately so callers can combine it with other rewrites.
+void populateCoIterVectorizePatterns(RewritePatternSet &patterns,
+                                     unsigned vectorWidth,
                                      llvm::StringRef targetFunction = "");
 
-// pass registration
-// call once at startup to make the pass available via CLI flag --splyce
+// Registers the pass so it is available via the CLI flag --splyce.
+// Call once at startup.
 void registerCoIterVectorizePass();
 
-
-// generated base-class boilerplate from TableGen
+// TableGen-generated base class boilerplate.
 #define GEN_PASS_DECL_COITERVECTORIZE
 #include "Transforms/Passes.h.inc"
+
 } // namespace mlir
 
 #endif // TRANSFORMS_SPLYCE_VECTORIZE_PASS_H

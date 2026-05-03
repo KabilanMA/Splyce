@@ -5,7 +5,7 @@ mlir-opt spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-elementwise-ops
 ```
 
 ```bash
-mlir-opt spmv_scf.mlir --sparsification-and-bufferization --sparse-storage-specifier-to-llvm --canonicalize --convert-linalg-to-loops --convert-vector-to-scf --expand-realloc --convert-scf-to-openmp --convert-scf-to-cf --expand-strided-metadata --lower-affine --convert-vector-to-llvm --convert-complex-to-standard --arith-expand --convert-math-to-llvm --convert-complex-to-libm --convert-vector-to-llvm --convert-openmp-to-llvm --convert-to-llvm -o intermediate.mlir
+mlir-opt spgemm_splyce.mlir --sparsification-and-bufferization --sparse-storage-specifier-to-llvm --canonicalize --convert-linalg-to-loops --convert-vector-to-scf --expand-realloc --convert-scf-to-openmp --convert-scf-to-cf --expand-strided-metadata --lower-affine --convert-vector-to-llvm --convert-complex-to-standard --arith-expand --convert-math-to-llvm --convert-complex-to-libm --convert-vector-to-llvm --convert-openmp-to-llvm --convert-to-llvm -o spgemm_llvm.mlir
 ```
 To translate Sparse Dialect code into SCF loops use the follows command:
 
@@ -216,7 +216,7 @@ Remove the `--debug-only=splyce-vectorize` to avoid debug output.
 ./build/bin/splyce-opt \
   "--splyce=target-function=mttkrp_kernel" \
   --debug-only=splyce-vectorize \
-  ../../playground/sparse_dialect/mttkrp_scf.mlir
+  ./playground/spgemm_scf.mlir
   -o /tmp/coiter_vec_out.mlir
 
 cat /tmp/coiter_vec_out.mlir
@@ -224,7 +224,7 @@ cat /tmp/coiter_vec_out.mlir
 
 #### All possible cmd arguments for the pass.
 ```bash
-./build/bin/splyce-opt --splyce="vector-width=8 min-density=0.1 runtime-density-threshold=0.5 target-function=mttkrp_kernel" input.mlir
+./build/bin/splyce-opt --splyce="vector-width=8 min-density=0.1 target-function=spgemm" input.mlir
 
 ```
 <!-- # 3. Enable debug output to see why patterns are (or are not) matching.

@@ -8,6 +8,7 @@
 #include "Transforms/CoIterVectorizePass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -25,6 +26,7 @@ int main(int argc, char **argv) {
   // The broader set (linalg, llvm, sparse_tensor) allows the tool to parse
   // real sparsification output (e.g. mttkrp_scf.mlir) without --allow-unregistered-dialect.
   registry.insert<mlir::arith::ArithDialect,
+                  mlir::bufferization::BufferizationDialect,
                   mlir::func::FuncDialect,
                   mlir::LLVM::LLVMDialect,
                   mlir::linalg::LinalgDialect,

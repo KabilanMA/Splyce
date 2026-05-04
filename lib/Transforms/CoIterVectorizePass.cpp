@@ -46,10 +46,12 @@ using namespace mlir::splyce;
 // accumulated value and pointer positions chain correctly.
 struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
     CoIterVectorizePattern(MLIRContext *ctx, unsigned vectorWidth,
-                           std::string targetFunction, PatternBenefit benefit = 1)
+                           std::string targetFunction, std::string phaseSelect,
+                           PatternBenefit benefit = 1)
         : OpRewritePattern<scf::WhileOp>(ctx, benefit),
           vectorWidth(vectorWidth),
-          targetFunction(std::move(targetFunction)) {}
+          targetFunction(std::move(targetFunction)),
+          cfg(PhaseConfig::parse(phaseSelect)) {}
 
     LogicalResult matchAndRewrite(scf::WhileOp whileOp,
                                   PatternRewriter &rewriter) const override {
@@ -79,7 +81,7 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
         rewriter.setInsertionPoint(whileOp);
 
         // (1) SIMD fast-lane
-        SimdFastLaneBuilder simdBuilder(desc, vectorWidth, rewriter);
+        SimdFastLaneBuilder simdBuilder(desc, vectorWidth, rewriter, cfg);
         scf::WhileOp simdWhile = simdBuilder.build(loc);
 
         // (2) Scalar epilogue
@@ -101,6 +103,7 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
 private:
     unsigned vectorWidth;
     std::string targetFunction;
+    PhaseConfig cfg;
 };
 
 // pass
@@ -112,14 +115,17 @@ struct CoIterVectorizePass
 
     CoIterVectorizePass() = default;
 
-    CoIterVectorizePass(unsigned vectorWidth, std::string targetFunction) {
-        this->vectorWidth     = vectorWidth;
-        this->targetFunction  = std::move(targetFunction);
+    CoIterVectorizePass(unsigned vectorWidth, std::string targetFunction,
+                        std::string phaseSelect) {
+        this->vectorWidth    = vectorWidth;
+        this->targetFunction = std::move(targetFunction);
+        this->phaseSelect    = std::move(phaseSelect);
     }
 
     void runOnOperation() override {
         RewritePatternSet patterns(&getContext());
-        populateCoIterVectorizePatterns(patterns, vectorWidth, targetFunction);
+        populateCoIterVectorizePatterns(patterns, vectorWidth, targetFunction,
+                                        phaseSelect);
         if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
             signalPassFailure();
     }
@@ -131,15 +137,19 @@ struct CoIterVectorizePass
 
 void mlir::populateCoIterVectorizePatterns(RewritePatternSet &patterns,
                                            unsigned vectorWidth,
-                                           StringRef targetFunction) {
+                                           StringRef targetFunction,
+                                           StringRef phaseSelect) {
     patterns.add<CoIterVectorizePattern>(patterns.getContext(), vectorWidth,
-                                        targetFunction.str());
+                                        targetFunction.str(),
+                                        phaseSelect.str());
 }
 
 std::unique_ptr<Pass> mlir::createCoIterVectorizePass(unsigned vectorWidth,
-                                                      StringRef targetFunction) {
+                                                      StringRef targetFunction,
+                                                      StringRef phaseSelect) {
     return std::make_unique<CoIterVectorizePass>(vectorWidth,
-                                                 targetFunction.str());
+                                                 targetFunction.str(),
+                                                 phaseSelect.str());
 }
 
 void mlir::registerCoIterVectorizePass() {

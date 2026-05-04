@@ -60,7 +60,13 @@ def CoIterVectorize : Pass<"splyce"> {
     Option<"targetFunction", "target-function", "std::string",
            /*default=*/"\"\"",
            "Only transform scf.while loops inside this named function. "
-           "Empty string (default) matches loops in all functions.">
+           "Empty string (default) matches loops in all functions.">,
+
+    Option<"phaseSelect", "phase-select", "std::string",
+           /*default=*/"\"001\"",
+           "3-bit phase selector 'XYZ': X=Phase3 (pointer advance), "
+           "Y=Phase2 (tensor compute), Z=Phase1 (load + cross-compare). "
+           "'1'=vector, '0'=scalar. Default '001' vectorizes Phase 1 only.">
   ];
 
   let constructor = "mlir::createCoIterVectorizePass()";

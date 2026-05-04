@@ -79,4 +79,29 @@ def CoIterVectorize : Pass<"splyce"> {
   ];
 }
 
+def AddRestrictToTensor : Pass<"splyce-bufferize-restrict"> {
+  let summary = "Stamp the restrict attribute on bufferization.to_tensor ops";
+
+  let description = [{
+    The MLIR sparse-tensor-conversion pipeline emits
+
+      bufferization.to_tensor %buf : memref<...> to tensor<...>
+
+    without the restrict attribute.  One-shot-bufferize requires restrict to
+    establish buffer-ownership: it proves that no other alias writes through the
+    same buffer, enabling in-place bufferization of the function return value.
+
+    This pass walks the IR and adds restrict to every to_tensor op that lacks
+    it, matching what manual editing would produce.  It is idempotent — already-
+    restricted ops are left unchanged.
+
+    To disable the transformation at compile time, comment out the single
+    markToTensorRestrict() call inside AddRestrictToTensorPass::runOnOperation.
+  }];
+
+  let constructor = "mlir::createAddRestrictToTensorPass()";
+
+  let dependentDialects = ["mlir::bufferization::BufferizationDialect"];
+}
+
 #endif // COITER_VECTORIZE_PASSES_TD

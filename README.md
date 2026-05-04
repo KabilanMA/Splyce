@@ -88,7 +88,7 @@ mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-el
 
 **3. SCF -> LLVM Dialect**
 ```bash
-mlir-opt spgemm_splyce.mlir --canonicalize --cse --loop-invariant-code-motion \
+mlir-opt ./playground/spgemm_scf.mlir --canonicalize --cse --loop-invariant-code-motion \
   --one-shot-bufferize="bufferize-function-boundaries=true allow-return-allocs-from-loops=true" \
   --convert-bufferization-to-memref --lower-vector-mask --convert-vector-to-scf \
   --canonicalize --cse --expand-realloc --sparse-storage-specifier-to-llvm \
@@ -96,7 +96,7 @@ mlir-opt spgemm_splyce.mlir --canonicalize --cse --loop-invariant-code-motion \
   --expand-strided-metadata --finalize-memref-to-llvm \
   --convert-vector-to-llvm="enable-x86vector=1" --convert-math-to-llvm \
   --convert-arith-to-llvm --convert-func-to-llvm --convert-cf-to-llvm \
-  --reconcile-unrealized-casts -o spgemm_llvm_splyce.mlir
+  --reconcile-unrealized-casts -o ./playground/spgemm_llvm_splyce.mlir
 ```
 
 **4. Binary Generation**

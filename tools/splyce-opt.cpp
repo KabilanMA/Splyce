@@ -5,6 +5,7 @@
 //   splyce-opt --splyce="vector-width=8 min-density=0.1" input.mlir
 
 
+#include "Transforms/BufferizationPrepPass.h"
 #include "Transforms/CoIterVectorizePass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -35,7 +36,8 @@ int main(int argc, char **argv) {
                   mlir::sparse_tensor::SparseTensorDialect,
                   mlir::vector::VectorDialect>();
 
-  // Register the pass so --splyce is visible on the CLI.
+  // Register passes so they are visible on the CLI.
+  mlir::registerAddRestrictToTensorPass();
   mlir::registerCoIterVectorizePass();
 
   // Standard utility passes (CSE, canonicalize) useful for pre/post inspection.

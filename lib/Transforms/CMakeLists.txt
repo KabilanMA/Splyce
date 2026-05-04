@@ -11,7 +11,8 @@
 
 add_mlir_library(CoIterVectorizeTransforms
 
-  # Sources 
+  # Sources
+  BufferizationPrepPass.cpp
   CoIterPattern.cpp
   SimdFastLaneBuilder.cpp
   CoIterVectorizePass.cpp
@@ -27,6 +28,7 @@ add_mlir_library(CoIterVectorizeTransforms
   # that links CoIterVectorizeTransforms (e.g. coiter-opt).
   LINK_LIBS PUBLIC
     MLIRArithDialect
+    MLIRBufferizationDialect
     MLIRFuncDialect
     MLIRMemRefDialect
     MLIRSCFDialect

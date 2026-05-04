@@ -83,7 +83,7 @@ mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-el
 
 **2. Splyce Vectorization (SCF -> Vectorized SCF)**
 ```bash
-./build/bin/splyce-opt ./playground/spgemm_scf.mlir --splyce="vector-width=4" -o ./playground/spgemm_splyce.mlir
+./build/bin/splyce-opt ./playground/spgemm_scf.mlir --splyce="target-function=spgemm vector-width=4 phase-select=001" -o ./playground/spgemm_splyce.mlir
 ```
 
 **3. SCF -> LLVM Dialect**
@@ -106,7 +106,7 @@ mlir-translate spgemm_llvm_splyce.mlir --mlir-to-llvmir -o spgemm_splyce.ll
 clang -O3 spgemm_splyce.ll -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize  -L"$LLVM_INSTALL_DIR/lib"   -lmlir_c_runner_utils   -lmlir_runner_utils   -Wl,-rpath,"$LLVM_INSTALL_DIR/lib"   -o test_benchmark_spgemm_splyce
 ```
 
-### Multi-Threaded Compilation (e.g., MTTKRP)
+### Multi-Threaded Compilation (e.g., SpGEMM)
 
 **1. SparseTensor -> SCF (Parallel)**
 ```bash
@@ -120,7 +120,7 @@ mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-el
 
 **2. Splyce Vectorization**
 ```bash
-./build/bin/splyce-opt ./playground/spgemm_scf_parallel.mlir --splyce="vector-width=4" -o ./playground/spgemm_splyce_parallel.mlir
+./build/bin/splyce-opt ./playground/spgemm_scf_parallel.mlir --splyce="target-function=spgemm vector-width=4 phase-select=001" -o ./playground/spgemm_splyce_parallel.mlir
 ```
 
 **3. SCF -> LLVM Dialect**

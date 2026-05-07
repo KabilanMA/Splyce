@@ -6,7 +6,8 @@ Splyce is an out-of-tree MLIR project featuring a custom pass (`--splyce`) desig
 
 ## Building and Installation
 
-Tested against LLVM 22.1.5.
+Tested against LLVM 23.0.0git.
+At the moment, this is not released yet. Therefore we have pulled the main branch of LLVM to build it ourselves (More specifically, from commit 6a6d43255059).
 
 ### Prerequisites
 
@@ -33,21 +34,21 @@ You can either build LLVM from source or use a pre-built installation.
 ```bash
 git clone https://github.com/llvm/llvm-project.git
 cd llvm-project
-git fetch --tags
-git checkout tags/llvmorg-22.1.5 -b release-22.1.5
+git checkout 6a6d43255059
 python3 -m venv py_venv
 source py_venv/bin/activate
+pip install nanobind
 mkdir build
 ```
 
 If you have already installed clang or lld from previous step:
 ```bash
-cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_ENABLE_ASSERTIONS=ON   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=lld   -DCMAKE_C_COMPILER=clang   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir;lld"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=bfd   -DCMAKE_C_COMPILER=gcc   -DCMAKE_CXX_COMPILER=g++ -DLLVM_ENABLE_ASSERTIONS=OFF -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
 ```
 
 If you want to install clang and lld from source (Installing clang from source is recommended):
 ```bash
-cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir;lld"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_ENABLE_ASSERTIONS=ON   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=bfd   -DCMAKE_C_COMPILER=gcc   -DCMAKE_CXX_COMPILER=g++ -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=lld   -DCMAKE_C_COMPILER=clang   -DCMAKE_CXX_COMPILER=clang++ -DLLVM_ENABLE_ASSERTIONS=OFF -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
 ```
 
 ```bash
@@ -56,10 +57,6 @@ export LLVM_INSTALL=$HOME/llvm-install
 export PATH=$LLVM_INSTALL/bin:$PATH
 ```
 
-**PATH B - Pre-built Install (Faster)**
-If your OS provides MLIR cmake files (e.g., Ubuntu 22.04+ or macOS):
-*   **Ubuntu:** `sudo apt-get install llvm-19-dev mlir-19-tools libmlir-19-dev`
-*   **macOS:** `brew install llvm`
 
 *(Make sure to export `LLVM_INSTALL` to your installation directory and add it to your `PATH`).*
 
@@ -108,12 +105,11 @@ mlir-opt ./playground/spgemm_splyce.mlir --canonicalize --cse --loop-invariant-c
   --canonicalize --cse --expand-realloc --sparse-storage-specifier-to-llvm \
   --convert-linalg-to-loops --lower-affine --canonicalize --cse --convert-scf-to-cf \
   --expand-strided-metadata --finalize-memref-to-llvm \
-  --convert-vector-to-llvm="enable-x86vector=1" --convert-math-to-llvm \
+  --convert-vector-to-llvm --convert-math-to-llvm \
   --convert-arith-to-llvm --convert-func-to-llvm --convert-cf-to-llvm \
   --reconcile-unrealized-casts -o ./playground/spgemm_splyce.mlir
 ```
 
-If you have installed version higher than 22.1.5, change the flag `--convert-vector-to-llvm="enable-x86vector=1"` to `--convert-vector-to-llvm="enable-x86=1"`
 
 **4. Binary Generation**
 ```bash

@@ -415,55 +415,6 @@ The repository includes `benchmark.sh`, which automates the full end-to-end eval
 
 ---
 
-### Evaluation Metrics
-
-To evaluate Splyce's performance improvements:
-
-**1. Time Measurements**
-```bash
-# Without Splyce vectorization
-time ./test_benchmark_spgemm_scalar
-
-# With Splyce vectorization  
-time ./test_benchmark_spgemm_splyce
-
-# With Splyce + OpenMP parallelization
-time ./test_benchmark_spgemm_splyce_parallel
-```
-
-**2. Compiler Intermediate Representations**
-
-Compare IR at each stage:
-```bash
-# Check IR before vectorization
-cat ./playground/spgemm_scf.mlir
-
-# Check IR after vectorization
-cat ./playground/spgemm_splyce.mlir
-
-# Check generated LLVM IR
-cat ./playground/spgemm_splyce.ll
-```
-
-**3. Performance Targets**
-
-Typical improvements measured by Splyce:
-- **Single-thread**: 2-4× speedup over scalar sparse dialect
-- **Multi-thread**: 8-16× speedup with 8 threads + vectorization
-- **Bandwidth**: Reduced memory stalls through better cache utilization
-- **CPU Utilization**: Higher IPC (instructions per cycle) via masked SIMD
-
-**4. Sparsity Patterns**
-
-Test with different matrix densities and structures:
-- **Regular sparsity**: ~10% density (uniform random)
-- **Clustered sparsity**: ~10% density (block-like patterns)
-- **Very sparse**: <1% density (extreme cases)
-
-See [Troubleshooting](#troubleshooting) for performance analysis tools.
-
----
-
 ## FAQ
 
 ### Q1: Why not use a BlockSparse encoding?

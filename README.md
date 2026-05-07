@@ -10,6 +10,8 @@ Splyce is an MLIR optimization pass (`--splyce`) that vectorizes N-way co-iterat
 - [Building and Installation](#building-and-installation)
 - [Usage Examples](#usage-examples)
 - [Evaluation](#evaluation)
+  - [Automated Benchmark Script](#automated-benchmark-script)
+  - [Evaluation Metrics](#evaluation-metrics)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 
@@ -365,6 +367,53 @@ clang -O3 ./playground/spgemm_splyce_parallel.ll \
 ---
 
 ## Evaluation
+
+### Automated Benchmark Script
+
+The repository includes `benchmark.sh`, which automates the full end-to-end evaluation pipeline in a single command:
+
+```bash
+./benchmark.sh
+```
+
+**What it does:**
+
+1. Sparsifies `playground/spgemm.mlir` to SCF form (and a parallel variant if OpenMP is available)
+2. Applies the Splyce vectorization pass
+3. Lowers through the full MLIR → LLVM dialect → LLVM IR pipeline for each variant
+4. Compiles native binaries with `clang -O3 -mavx512f -mavx512vl`
+5. Runs 25 benchmark iterations for each variant
+6. Prints a performance summary with totals, averages, and speedups
+7. Cleans up all intermediate files, leaving only the result files
+
+**Output files** (written to the workspace root):
+| File | Contents |
+|---|---|
+| `benchmark_scf` | Iteration times for the scalar SCF baseline |
+| `benchmark_splyce` | Iteration times for Splyce (single-thread) |
+| `benchmark_splyce_parallel` | Iteration times for Splyce + OpenMP *(if libomp is available)* |
+
+**Example summary output:**
+```
+========================================
+  Performance Summary
+========================================
+  SCF baseline                    total=  5.2341 s  avg=  0.2094 s  (n=25)
+  Splyce (single-thread)          total=  1.8763 s  avg=  0.0751 s  (n=25)
+  Splyce (parallel/OpenMP)        total=  0.3012 s  avg=  0.0120 s  (n=25)
+
+  Splyce vs SCF baseline:          2.79x speedup
+  Splyce parallel vs SCF:         17.38x speedup
+  Splyce parallel vs Splyce:       6.23x speedup
+========================================
+```
+
+**Prerequisites:**
+- `LLVM_INSTALL` environment variable must be set (see [Building and Installation](#building-and-installation))
+- `mlir-opt`, `mlir-translate`, and `clang` must be on `$PATH`
+- For the parallel variant: LLVM must be built with `-DLLVM_ENABLE_RUNTIMES=openmp` so that `libomp.so` is present under `$LLVM_INSTALL/lib`. The script detects its absence and skips the parallel variant automatically.
+
+---
 
 ### Evaluation Metrics
 

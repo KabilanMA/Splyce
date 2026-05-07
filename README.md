@@ -6,7 +6,7 @@ Splyce is an out-of-tree MLIR project featuring a custom pass (`--splyce`) desig
 
 ## Building and Installation
 
-Tested against LLVM 23.0.0 (but it should work on any LLVM >= 23.0.0git).
+Tested against LLVM 22.1.5.
 
 ### Prerequisites
 
@@ -23,21 +23,35 @@ brew install cmake ninja llvm python3
 sudo dnf install -y cmake ninja-build clang lld python3 git zlib-devel
 ```
 
+If you don't root access, we can move forward only with cmake, python3 and git for now.
+
 ### 1. LLVM & MLIR Setup
 
 You can either build LLVM from source or use a pre-built installation.
 
 **PATH A - Build from Source (Recommended)**
 ```bash
-git clone --depth=1 https://github.com/llvm/llvm-project.git
+git clone https://github.com/llvm/llvm-project.git
 cd llvm-project
-cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DLLVM_ENABLE_PROJECTS="mlir" -DLLVM_TARGETS_TO_BUILD="X86" \
-  -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_INSTALL_UTILS=ON \
-  -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
-ninja -C build install
+git fetch --tags
+git checkout tags/llvmorg-22.1.5 -b release-22.1.5
+python3 -m venv py_venv
+source py_venv/bin/activate
+mkdir build
+```
 
+If you have already installed clang or lld from previous step:
+```bash
+cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="mlir"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_ENABLE_ASSERTIONS=ON   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=lld   -DCMAKE_C_COMPILER=clang   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+```
+
+If you want to install clang and lld from source (Installing clang from source is recommended):
+```bash
+cmake -S llvm -B build -G Ninja  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir;lld"   -DLLVM_ENABLE_RUNTIMES="all"   -DCMAKE_BUILD_TYPE=Release   -DLLVM_TARGETS_TO_BUILD="host;X86"   -DLLVM_ENABLE_ASSERTIONS=ON   -DLLVM_INCLUDE_TESTS=ON   -DMLIR_ENABLE_BINDINGS_PYTHON=ON   -DLLVM_USE_LINKER=bfd   -DCMAKE_C_COMPILER=gcc   -DCMAKE_CXX_COMPILER=g++ -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+```
+
+```bash
+ninja -C build install
 export LLVM_INSTALL=$HOME/llvm-install
 export PATH=$LLVM_INSTALL/bin:$PATH
 ```
@@ -88,7 +102,7 @@ mlir-opt ./playground/spgemm.mlir --linalg-generalize-named-ops --linalg-fuse-el
 
 **3. SCF -> LLVM Dialect**
 ```bash
-mlir-opt ./playground/spgemm_scf.mlir --canonicalize --cse --loop-invariant-code-motion \
+mlir-opt ./playground/spgemm_splyce.mlir --canonicalize --cse --loop-invariant-code-motion \
   --one-shot-bufferize="bufferize-function-boundaries=true allow-return-allocs-from-loops=true" \
   --convert-bufferization-to-memref --lower-vector-mask --convert-vector-to-scf \
   --canonicalize --cse --expand-realloc --sparse-storage-specifier-to-llvm \
@@ -96,14 +110,16 @@ mlir-opt ./playground/spgemm_scf.mlir --canonicalize --cse --loop-invariant-code
   --expand-strided-metadata --finalize-memref-to-llvm \
   --convert-vector-to-llvm="enable-x86vector=1" --convert-math-to-llvm \
   --convert-arith-to-llvm --convert-func-to-llvm --convert-cf-to-llvm \
-  --reconcile-unrealized-casts -o ./playground/spgemm_llvm_splyce.mlir
+  --reconcile-unrealized-casts -o ./playground/spgemm_splyce.mlir
 ```
+
+If you have installed version higher than 22.1.5, change the flag `--convert-vector-to-llvm="enable-x86vector=1"` to `--convert-vector-to-llvm="enable-x86=1"`
 
 **4. Binary Generation**
 ```bash
-mlir-translate spgemm_llvm_splyce.mlir --mlir-to-llvmir -o spgemm_splyce.ll
+mlir-translate ./playground/spgemm_splyce.mlir --mlir-to-llvmir -o ./playground/spgemm_splyce.ll
 
-clang -O3 spgemm_splyce.ll -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize  -L"$LLVM_INSTALL_DIR/lib"   -lmlir_c_runner_utils   -lmlir_runner_utils   -Wl,-rpath,"$LLVM_INSTALL_DIR/lib"   -o test_benchmark_spgemm_splyce
+clang -O3 ./playground/spgemm_splyce.ll -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize  -L"$LLVM_INSTALL/lib"   -lmlir_c_runner_utils   -lmlir_runner_utils   -Wl,-rpath,"$LLVM_INSTALL/lib"   -o ./playground/test_benchmark_spgemm_splyce
 ```
 
 ### Multi-Threaded Compilation (e.g., SpGEMM)
@@ -141,7 +157,7 @@ mlir-translate ./playground/spgemm_llvm_splyce_parallel.mlir --mlir-to-llvmir -o
 
 clang -O3 ./playground/spgemm_llvm_splyce_parallel.ll -mavx512f -mavx512vl -fopenmp -fno-vectorize \
   -fno-slp-vectorize -L"$LLVM_INSTALL/lib" -lmlir_c_runner_utils -lmlir_runner_utils \
-  -Wl,-rpath,"$LLVM_INSTALL/lib" -o test_benchmark_spgemm_splyce_parallel
+  -Wl,-rpath,"$LLVM_INSTALL/lib" -o ./playground/test_benchmark_spgemm_splyce_parallel
 ```
 
 ---
@@ -158,3 +174,8 @@ If the data is naturally block-structured. If real nonzeros cluster into `B x B`
 
 **3. When is the direct sparse dialect beneficial compared to Splyce vectorization?**
 The Splyce vectorization is an optimization pass applied on top of the sparse dialect. If the density of nonzeros is extremely low, the shuffle and mask-matching overhead in the SIMD fast-lane may outweigh the scalar loop branching. In those rare scenarios, standard scalar sparse dialect lowering might yield better performance.
+
+================ TODO ================
+
+1. Evaluate the pass with BlockSparse formats
+

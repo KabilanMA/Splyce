@@ -113,14 +113,17 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
                 coordScalars[s][k] = ib.create<vector::ExtractOp>(
                     allCoords[s], ArrayRef<int64_t>{(int64_t)k});
 
-        // W cross-comparisons: broadcast(coord[0][k]) eq coordVec[1]
-        // Masked B-value selection + add-reduction per driver lane.
+        // Phase 1a: all cross-comparisons — broadcast(coord[0][k]) eq coordVec[1]
+        llvm::SmallVector<Value, 8> rows(W);
         for (unsigned k = 0; k < W; ++k) {
             Value aBcast = ib.create<vector::BroadcastOp>(vecIdx(),
                                                            coordScalars[0][k]);
-            Value row    = ib.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
-                                                     aBcast, allCoords[1]);
-            Value bSel   = ib.create<arith::SelectOp>(row, allVals[1], zeroVF);
+            rows[k] = ib.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
+                                                aBcast, allCoords[1]);
+        }
+        // Phase 1b: masked B-value selection + add-reduction per driver lane.
+        for (unsigned k = 0; k < W; ++k) {
+            Value bSel    = ib.create<arith::SelectOp>(rows[k], allVals[1], zeroVF);
             bMatchVals[k] = ib.create<vector::ReductionOp>(
                 vector::CombiningKind::ADD, bSel);
         }

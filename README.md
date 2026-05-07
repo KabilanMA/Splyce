@@ -189,7 +189,7 @@ ninja -C build
 
 ```bash
 ./build/bin/splyce-opt --help | grep splyce
-
+```
 
 
 ---
@@ -230,6 +230,7 @@ mlir-opt ./playground/spgemm.mlir \
 ```bash
 ./build/bin/splyce-opt ./playground/spgemm_scf.mlir \
   --splyce="target-function=spgemm vector-width=4 phase-select=001" \
+  --splyce-bufferize-restrict \
   -o ./playground/spgemm_splyce.mlir
 ```
 

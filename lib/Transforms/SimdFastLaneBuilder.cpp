@@ -78,7 +78,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
     for (unsigned s = 0; s < N; ++s)
         ptrs[s] = args[desc.streams[s].argIndex];
 
-    // ── Phase 1: Load coordinates and values ─────────────────────────────────
+    // Phase 1: Load coordinates and values
     //
     // coordScalars[s][k] and valScalars[s][k] are always populated (scalar).
     // allCoords[s] / allVals[s] are only populated when vecPhase1=true.
@@ -168,7 +168,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
         }
     }
 
-    // ── Phase 2: Predicated tensor computation ────────────────────────────────
+    // Phase 2: Predicated tensor computation
     //
     // aVals[k]: A value for lane k.  Comes from vector.extract (vecPhase1=true)
     // or from the scalar loads (vecPhase1=false).
@@ -203,7 +203,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
         newAcc = ib.create<arith::AddFOp>(args[desc.accArgIndex], total);
     }
 
-    // ── Phase 3: Branchless pointer advancement ───────────────────────────────
+    // Phase 3: Branchless pointer advancement
     //
     // pivot = min over all streams of the last (largest) coord in the window.
 

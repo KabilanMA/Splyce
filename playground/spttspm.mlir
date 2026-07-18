@@ -1,5 +1,5 @@
 #Sparse3D = #sparse_tensor.encoding<{
-  map = (d0, d1, d2) -> (d0 : dense, d1 : dense, d2 : compressed)
+  map = (d0, d1, d2) -> (d0 : compressed, d1 : compressed, d2 : compressed)
 }>
 
 // 2D Sparse Encoding (CSC): stored column-major
@@ -7,6 +7,9 @@
   map = (d0, d1) -> (d1 : dense, d0 : compressed)
 }>
 
+func.func private @rtclock() -> f64
+func.func private @printNewline()
+func.func private @printF64(f64)
 func.func private @printMemrefF64(%ptr : tensor<*xf64>)
 
 llvm.mlir.global internal constant @fileA("playground/tensor_A_test.tns\00")
@@ -45,24 +48,28 @@ func.func @spttspm(
   return %result : tensor<?x?x?xf64, #Sparse3D>
 }
 
-func.func @main() {
+func.func @main(%argA: !llvm.ptr, %argB: !llvm.ptr) {
   %file_a = llvm.mlir.addressof @fileA : !llvm.ptr
   %file_b = llvm.mlir.addressof @fileB : !llvm.ptr
 
   %A = sparse_tensor.new %file_a : !llvm.ptr to tensor<?x?x?xf64, #Sparse3D>
   %B = sparse_tensor.new %file_b : !llvm.ptr to tensor<?x?xf64, #CSC>
 
-  %C = func.call @spttspm(%A, %B)
-    : (tensor<?x?x?xf64, #Sparse3D>, tensor<?x?xf64, #CSC>) -> tensor<?x?x?xf64, #Sparse3D>
+  // 1. Warm-up
+  %warmup = func.call @spttspm(%A, %B) : (tensor<?x?x?xf64, #Sparse3D>, tensor<?x?xf64, #CSC>) -> tensor<?x?x?xf64, #Sparse3D>
+  bufferization.dealloc_tensor %warmup : tensor<?x?x?xf64, #Sparse3D>
 
-  %Cdense = sparse_tensor.convert %C : tensor<?x?x?xf64, #Sparse3D> to tensor<?x?x?xf64>
-  %Cprint = tensor.cast %Cdense : tensor<?x?x?xf64> to tensor<*xf64>
-  func.call @printMemrefF64(%Cprint) : (tensor<*xf64>) -> ()
+  %start_comp = func.call @rtclock() : () -> f64
+  %C = func.call @spttspm(%A, %B) : (tensor<?x?x?xf64, #Sparse3D>, tensor<?x?xf64, #CSC>) -> tensor<?x?x?xf64, #Sparse3D>
+  %end_comp = func.call @rtclock() : () -> f64
+  
+  // 3. Output the computation time
+  %elapsed = arith.subf %end_comp, %start_comp : f64
+  func.call @printF64(%elapsed) : (f64) -> ()
 
   bufferization.dealloc_tensor %A : tensor<?x?x?xf64, #Sparse3D>
   bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSC>
   bufferization.dealloc_tensor %C : tensor<?x?x?xf64, #Sparse3D>
-  bufferization.dealloc_tensor %Cdense : tensor<?x?x?xf64>
 
   return
 }

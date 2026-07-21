@@ -202,12 +202,44 @@ ninja -C build
 
 A typical Splyce evaluation workflow:
 
-1. **Sparse Dialect → SCF** (Sparsification)
-2. **SCF → Vectorized SCF** (Splyce Pass)
-3. **Vectorized SCF → LLVM Dialect** (Lowering)
-4. **LLVM Dialect → Binary** (Compilation)
+1. **Sparse Dialect -> SCF** (Sparsification)
+2. **SCF -> Vectorized SCF** (Splyce Pass)
+3. **Vectorized SCF -> LLVM Dialect** (Lowering)
+4. **LLVM Dialect -> Binary** (Compilation)
+
+Steps 1–3 can be run either as a single `splyce-opt` command, or as the
+individual `mlir-opt` / `splyce-opt` stages it's built from. Both examples
+below show both ways; pick whichever suits your workflow - a single
+`splyce-opt` invocation for everyday use, or the broken-out stages when you
+need to inspect or modify the IR between passes.
+
+**`splyce-opt`'s pipeline-bundling flags:**
+- `--sparsify-to-scf`: Runs the full linalg/sparse_tensor -> scf lowering pipeline (the `mlir-opt` stage below) in one flag.
+- `--lower-to-llvm`: Runs the full scf -> LLVM dialect lowering pipeline (the other `mlir-opt` stage below) in one flag.
+- `--parallelization`: Add to either of the above to switch to the OpenMP/parallel pipeline variant instead of the default single-threaded one.
+- `--splyce="..."`: The vectorization pass itself (unchanged either way).
 
 ### Example 1: Single-Threaded SpGEMM
+
+#### Option A: `splyce-opt` only (single command)
+
+```bash
+./build/bin/splyce-opt ./playground/spgemm.mlir \
+  --sparsify-to-scf \
+  --splyce="target-function=spgemm vector-width=4 phase-select=001" \
+  --splyce-bufferize-restrict \
+  --lower-to-llvm \
+  -o ./playground/spgemm_llvm.mlir
+```
+
+**Splyce Options:**
+- `target-function=<name>`: Target function to optimize
+- `vector-width=<width>`: SIMD vector width (4, 8, 16, etc.)
+- `phase-select=<phases>`: Bitmask for optimization phases
+
+Continue with **1.4 Generate Binary** below.
+
+#### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
 
 **1.1 Lower Sparse Tensor to SCF**
 
@@ -272,10 +304,12 @@ mlir-opt ./playground/spgemm_splyce.mlir \
   -o ./playground/spgemm_llvm.mlir
 ```
 
+Both options produce the same `./playground/spgemm_llvm.mlir`.
+
 **1.4 Generate Binary**
 
 ```bash
-mlir-translate ./playground/spgemm_llvm.mlir \
+./build/bin/splyce-translate ./playground/spgemm_llvm.mlir \
   --mlir-to-llvmir \
   -o ./playground/spgemm_splyce.ll
 
@@ -290,6 +324,21 @@ clang -O3 ./playground/spgemm_splyce.ll \
 ```
 
 ### Example 2: Multi-Threaded SpGEMM (OpenMP)
+
+#### Option A: `splyce-opt` only (single command)
+
+```bash
+./build/bin/splyce-opt ./playground/spgemm.mlir \
+  --sparsify-to-scf --parallelization \
+  --splyce="target-function=spgemm vector-width=4 phase-select=001" \
+  --splyce-bufferize-restrict \
+  --lower-to-llvm --parallelization \
+  -o ./playground/spgemm_llvm_parallel.mlir
+```
+
+Continue with **2.4 Generate Parallel Binary** below.
+
+#### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
 
 **2.1 Lower Sparse Tensor to SCF (with parallelization)**
 
@@ -345,10 +394,12 @@ mlir-opt ./playground/spgemm_splyce_parallel.mlir \
   -o ./playground/spgemm_llvm_parallel.mlir
 ```
 
+Both options produce the same `./playground/spgemm_llvm_parallel.mlir`.
+
 **2.4 Generate Parallel Binary**
 
 ```bash
-mlir-translate ./playground/spgemm_llvm_parallel.mlir \
+./build/bin/splyce-translate ./playground/spgemm_llvm_parallel.mlir \
   --mlir-to-llvmir \
   -o ./playground/spgemm_splyce_parallel.ll
 
@@ -363,6 +414,8 @@ clang -O3 ./playground/spgemm_splyce_parallel.ll \
   -Wl,-rpath,"$LLVM_INSTALL/lib" \
   -o ./playground/test_benchmark_spgemm_splyce_parallel
 ```
+
+> Note: `mlir-translate --mlir-to-llvmir` is a drop-in equivalent for `splyce-translate` in steps 1.4/2.4, if you're already relying on a separate LLVM install being on `$PATH`.
 
 ---
 

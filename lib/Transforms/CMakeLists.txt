@@ -25,7 +25,7 @@ add_mlir_library(CoIterVectorizeTransforms
 
   # Public link dependencies 
   # LINK_LIBS PUBLIC means these are transitively required by any target
-  # that links CoIterVectorizeTransforms (e.g. coiter-opt).
+  # that links CoIterVectorizeTransforms (e.g. splyce-opt).
   LINK_LIBS PUBLIC
     MLIRArithDialect
     MLIRBufferizationDialect

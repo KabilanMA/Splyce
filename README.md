@@ -218,6 +218,7 @@ need to inspect or modify the IR between passes.
 - `--lower-to-llvm`: Runs the full scf -> LLVM dialect lowering pipeline (the other `mlir-opt` stage below) in one flag.
 - `--parallelization`: Add to either of the above to switch to the OpenMP/parallel pipeline variant instead of the default single-threaded one.
 - `--splyce="..."`: The vectorization pass itself (unchanged either way).
+- `--splyce-fastmath` *(optional)*: Enables FMA fusion and tree-shaped (instead of strictly sequential) reductions. Off by default — see "Optional: Enabling FMA / Associative Math" below.
 
 ### Example 1: Single-Threaded SpGEMM
 
@@ -416,6 +417,49 @@ clang -O3 ./playground/spgemm_splyce_parallel.ll \
 ```
 
 > Note: `mlir-translate --mlir-to-llvmir` is a drop-in equivalent for `splyce-translate` in steps 1.4/2.4, if you're already relying on a separate LLVM install being on `$PATH`.
+
+### Optional: Enabling FMA / Associative Math (`--splyce-fastmath`)
+
+By default, none of the floating-point ops in this pipeline carry any
+fastmath annotation — not the SIMD fast lane, not Splyce's scalar epilogue,
+and not the plain scalar baseline that MLIR's own sparsifier emits. Under
+strict IEEE-754 semantics this means:
+- `vector.reduction` (the SIMD fast lane's horizontal reduction) must lower
+  as a strictly sequential sum instead of a parallel/tree reduction.
+- `arith.mulf` + `arith.addf` pairs (the multiply-accumulate in the fast
+  lane, the scalar epilogue, and the plain scalar baseline alike) never fuse
+  into a single FMA instruction.
+
+Passing `-Ofast` / `-ffast-math` at the final `clang` step does **not** fix
+this: those flags only take effect when Clang's own C/C++ frontend lowers
+source to IR, and that frontend is skipped entirely when compiling an
+already-lowered `.ll` file, which is what this pipeline hands to `clang`.
+`--splyce-fastmath` is the IR-level equivalent, applied upstream at the MLIR
+stage instead: it walks the IR and stamps `reassoc | contract` onto every op
+implementing `ArithFastMathInterface` (`arith.mulf`, `arith.addf`,
+`vector.reduction`, ...). The index/pointer arithmetic used for sparse
+coordinate walking is untouched, since it doesn't implement the interface.
+
+This flag is **optional** and off by default — none of the commands above
+include it. To enable it, add `--splyce-fastmath` anywhere after `--splyce`
+and before `--lower-to-llvm` (order relative to `--splyce-bufferize-restrict`
+doesn't matter):
+
+```bash
+./build/bin/splyce-opt ./playground/spgemm.mlir \
+  --sparsify-to-scf \
+  --splyce="target-function=spgemm vector-width=4 phase-select=001" \
+  --splyce-bufferize-restrict \
+  --splyce-fastmath \
+  --lower-to-llvm \
+  -o ./playground/spgemm_llvm.mlir
+```
+
+It also works standalone on the plain scalar baseline (no `--splyce` at
+all), fusing that loop's single `arith.mulf`/`arith.addf` pair into one FMA
+too — useful for a fair, apples-to-apples comparison against the vectorized
+path. Add `--splyce-fastmath="target-function=<name>"` to restrict it to one
+function, matching `--splyce`'s own option.
 
 ---
 

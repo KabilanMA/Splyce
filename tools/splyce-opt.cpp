@@ -1,5 +1,6 @@
 #include "Transforms/BufferizationPrepPass.h"
 #include "Transforms/CoIterVectorizePass.h"
+#include "Transforms/FastMathPrepPass.h"
 
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -223,6 +224,7 @@ int main(int argc, char **argv) {
 
   // Register passes so they are visible on the CLI.
   mlir::registerAddRestrictToTensorPass();
+  mlir::registerAddFastMathContractPass();
   mlir::registerCoIterVectorizePass();
 
   // Standard utility passes (CSE, canonicalize) useful for pre/post inspection.

@@ -13,6 +13,7 @@ add_mlir_library(CoIterVectorizeTransforms
 
   # Sources
   BufferizationPrepPass.cpp
+  FastMathPrepPass.cpp
   CoIterPattern.cpp
   SimdFastLaneBuilder.cpp
   CoIterVectorizePass.cpp

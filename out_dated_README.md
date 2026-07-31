@@ -234,3 +234,4 @@ cat /tmp/coiter_vec_out.mlir
   --debug-only=splyce-vectorize \
   test/coiter_scf.mlir -->
 
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm -DCMAKE_C_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13" -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"

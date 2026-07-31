@@ -104,4 +104,41 @@ def AddRestrictToTensor : Pass<"splyce-bufferize-restrict"> {
   let dependentDialects = ["mlir::bufferization::BufferizationDialect"];
 }
 
+def AddFastMathContract : Pass<"splyce-fastmath"> {
+  let summary = "Stamp reassoc+contract fastmath flags on floating-point arithmetic ops";
+
+  let description = [{
+    Neither the plain sparsification baseline nor Splyce's generated code
+    (SIMD fast lane, scalar epilogue) carries any fastmath annotation, so
+    strict IEEE-754 semantics force:
+      - horizontal reductions (vector.reduction) to lower as a strictly
+        sequential sum instead of a parallel/tree reduction, and
+      - multiply-accumulate pairs (arith.mulf followed by arith.addf) to stay
+        as separate instructions instead of fusing into a single FMA.
+
+    Because this project's kernels compile pre-lowered MLIR/LLVM IR directly
+    (mlir-opt/splyce-opt -> splyce-translate/mlir-translate -> clang), Clang's
+    -ffast-math / -Ofast never gets a chance to act: those flags only take
+    effect when Clang's own C/C++ frontend lowers source to IR, which is
+    skipped entirely for .ll input. This pass is the IR-level equivalent,
+    scoped to exactly the ops that implement ArithFastMathInterface
+    (arith.mulf, arith.addf, vector.reduction, etc.) — the index/pointer
+    arithmetic used for sparse coordinate walking is untouched, since it
+    doesn't implement the interface.
+
+    Idempotent: ORs reassoc|contract into each op's existing fastmath flags.
+  }];
+
+  let options = [
+    Option<"targetFunction", "target-function", "std::string",
+           /*default=*/"\"\"",
+           "Only annotate ops inside this named function. Empty string "
+           "(default) matches all functions.">
+  ];
+
+  let constructor = "mlir::createAddFastMathContractPass()";
+
+  let dependentDialects = ["mlir::arith::ArithDialect"];
+}
+
 #endif // COITER_VECTORIZE_PASSES_TD

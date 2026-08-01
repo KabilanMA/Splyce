@@ -31,6 +31,12 @@ struct StreamDescriptor {
     // Captured so the scf.if condition analysis can correlate it to this stream.
     Value loadedCoord;
 
+    // SSA result of this stream's float value load in the scf.if true-block
+    // ("%v = memref.load valsMemref[iterVar]"). Used to classify multiply-
+    // chain leaves as stream values vs. an extra loop-invariant scalar
+    // factor (see CoIterDescriptor::extraScalarFactor).
+    Value loadedVal;
+
     // Position of iterVar in the while op's iter-arg list (0-based).
     unsigned argIndex = 0;
 
@@ -71,10 +77,35 @@ struct CoIterDescriptor {
     // ~0u means no accumulator was found (pattern did not match).
     unsigned accArgIndex = ~0u;
 
+    // True when the kernel scatters its result directly into an output
+    // memref (e.g. A[coord, j] += ...) instead of threading a loop-carried
+    // scalar accumulator through the while loop — the shape produced when
+    // the co-iterated dimension is a parallel/output index rather than a
+    // reduction index (e.g. SpMMH). Mutually exclusive with
+    // hasAccumulator().
+    bool isScatterPattern = false;
+
+    // For scatter patterns: the output memref written by the scf.if body,
+    // and the "free" index (not one of this loop's iter-args — e.g. an
+    // enclosing scf.for's induction variable) used as its second subscript
+    // alongside the matched (driver-stream) coordinate.
+    Value outputMemref;
+    Value outputFreeIndex;
+
+    // An extra loop-invariant scalar factor multiplied into the per-match
+    // term alongside the N stream values — present in >2-operand
+    // contractions where one operand doesn't vary with this co-iteration
+    // (e.g. SpMTTKRP's B[i,k,l], SpMMH's C[k,j]). Null for a plain
+    // 2-factor product like SpGEMM's B[i,j]*C[j,k].
+    Value extraScalarFactor;
+
     unsigned numStreams() const { return streams.size(); }
 
     // True when the kernel accumulates into a loop-carried float iter-arg.
     bool hasAccumulator() const { return accArgIndex != ~0u; }
+
+    // True when an extra loop-invariant scalar factor was detected.
+    bool hasExtraScalarFactor() const { return static_cast<bool>(extraScalarFactor); }
 };
 
 // tryMatchCoIter
@@ -102,9 +133,19 @@ struct CoIterDescriptor {
 //      `cmpi eq, coord_k, globalMin` comparisons.
 //
 //  (6) The scf.if true-block contains exactly N float-typed value loads
-//      (one per stream).  The kernel result is loop-carried: the scf.if
-//      yields a float that appears as a non-index value in the do-block's
-//      scf.yield (accumulator pattern).
+//      (one per stream), and the kernel result is either:
+//        (a) accumulator pattern — the scf.if yields a float that appears
+//            as a non-index value in the do-block's scf.yield, or
+//        (b) scatter pattern — the scf.if has no results; instead its
+//            true-block does a load/accumulate/store round-trip directly
+//            into an output memref, indexed by [matchedCoord, freeIndex].
+//      Exactly one of hasAccumulator() / isScatterPattern is set on success.
+//
+//  (6 cont.) The per-match term (the accumulator's addend, or the scatter
+//      store's addend) must be a left-associative arith.mulf tree whose
+//      leaves are exactly the N stream value loads plus at most one extra
+//      loop-invariant scalar (desc.extraScalarFactor) — e.g. a third
+//      contraction operand that doesn't vary with this co-iteration.
 //
 //  (7) The do-block's scf.yield carries N index values each derivable
 //      from the corresponding iter var via arith.select / arith.addi.

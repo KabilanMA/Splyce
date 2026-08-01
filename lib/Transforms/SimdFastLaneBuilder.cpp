@@ -183,22 +183,72 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
             aVals[k] = valScalars[0][k];
     }
 
+    // desc.extraScalarFactor: a third contraction operand that doesn't vary
+    // with this co-iteration (e.g. SpMTTKRP's B[i,k,l], SpMMH's C[k,j]) —
+    // folded into every lane's contribution alongside aVals[k]*bMatchVals[k].
+    //
+    // desc.isScatterPattern: the co-iterated dimension is a parallel/output
+    // index rather than a reduction index (e.g. SpMMH, merging on row i),
+    // so each lane's match writes to its own driver-stream coordinate
+    // instead of folding into one loop-carried sum — different lanes may
+    // target different output addresses, so this can't be a single
+    // cross-lane reduction the way the accumulator case is.
     Value newAcc;
-    if (cfg.vecPhase2) {
+    if (desc.isScatterPattern) {
+        llvm::SmallVector<Value, 8> contribs(W);
+        if (cfg.vecPhase2) {
+            Value bValsVec   = ib.create<vector::FromElementsOp>(vecF(), ValueRange(bMatchVals));
+            Value aValsVec   = ib.create<vector::FromElementsOp>(vecF(), ValueRange(aVals));
+            Value contribVec = ib.create<arith::MulFOp>(aValsVec, bValsVec);
+            if (desc.extraScalarFactor) {
+                Value extraVec = ib.create<vector::BroadcastOp>(vecF(), desc.extraScalarFactor);
+                contribVec     = ib.create<arith::MulFOp>(contribVec, extraVec);
+            }
+            for (unsigned k = 0; k < W; ++k)
+                contribs[k] = ib.create<vector::ExtractOp>(
+                    contribVec, ArrayRef<int64_t>{(int64_t)k});
+        } else {
+            for (unsigned k = 0; k < W; ++k) {
+                Value c = ib.create<arith::MulFOp>(aVals[k], bMatchVals[k]);
+                if (desc.extraScalarFactor)
+                    c = ib.create<arith::MulFOp>(c, desc.extraScalarFactor);
+                contribs[k] = c;
+            }
+        }
+        // Scatter-accumulate: coordScalars[0][k] (the driver stream's own
+        // coordinate) is always the right address, matched or not — an
+        // unmatched lane has bMatchVals[k]==0, so its contribution is a
+        // harmless no-op add.
+        for (unsigned k = 0; k < W; ++k) {
+            Value cur = ib.create<memref::LoadOp>(
+                desc.outputMemref, ValueRange{coordScalars[0][k], desc.outputFreeIndex});
+            Value upd = ib.create<arith::AddFOp>(cur, contribs[k]);
+            ib.create<memref::StoreOp>(upd, desc.outputMemref,
+                ValueRange{coordScalars[0][k], desc.outputFreeIndex});
+        }
+    } else if (cfg.vecPhase2) {
         // Pack scalar bMatchVals and aVals into vectors, multiply, reduce.
         Value bValsVec  = ib.create<vector::FromElementsOp>(vecF(),
                               ValueRange(bMatchVals));
         Value aValsVec  = ib.create<vector::FromElementsOp>(vecF(),
                               ValueRange(aVals));
         Value contribVec = ib.create<arith::MulFOp>(aValsVec, bValsVec);
+        if (desc.extraScalarFactor) {
+            Value extraVec = ib.create<vector::BroadcastOp>(vecF(), desc.extraScalarFactor);
+            contribVec     = ib.create<arith::MulFOp>(contribVec, extraVec);
+        }
         Value total      = ib.create<vector::ReductionOp>(
             vector::CombiningKind::ADD, contribVec);
         newAcc = ib.create<arith::AddFOp>(args[desc.accArgIndex], total);
     } else {
         // Scalar: W mulf, binary-tree addf, accumulate.
         llvm::SmallVector<Value, 8> contribs(W);
-        for (unsigned k = 0; k < W; ++k)
-            contribs[k] = ib.create<arith::MulFOp>(aVals[k], bMatchVals[k]);
+        for (unsigned k = 0; k < W; ++k) {
+            Value c = ib.create<arith::MulFOp>(aVals[k], bMatchVals[k]);
+            if (desc.extraScalarFactor)
+                c = ib.create<arith::MulFOp>(c, desc.extraScalarFactor);
+            contribs[k] = c;
+        }
         Value total = binaryTreeSumF(loc, doB, contribs);
         newAcc = ib.create<arith::AddFOp>(args[desc.accArgIndex], total);
     }
@@ -252,11 +302,14 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
         }
     }
 
-    // Yield: patch stream pointers and accumulator; pass other args unchanged.
+    // Yield: patch stream pointers (and the accumulator, if this kernel has
+    // one — scatter-pattern kernels wrote directly to memory above instead,
+    // and their while loop has no accumulator iter-arg to patch).
     llvm::SmallVector<Value> yieldVals(args.begin(), args.end());
     for (unsigned s = 0; s < N; ++s)
         yieldVals[desc.streams[s].argIndex] = newPtrs[s];
-    yieldVals[desc.accArgIndex] = newAcc;
+    if (!desc.isScatterPattern)
+        yieldVals[desc.accArgIndex] = newAcc;
     ib.create<scf::YieldOp>(ValueRange(yieldVals));
 }
 

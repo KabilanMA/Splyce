@@ -147,37 +147,58 @@ def generate_sparse_2d_tns_col_sparsity(filename, rows, cols, sparsity):
 
     print(f"Generated sparse 2D tensor (column sparsity): {filename} | Shape: ({rows}, {cols}) | NNZ: {actual_nnz} | Sparsity: {sparsity}")
 
-def generate_spgemm_synthetic_data():
-    generate_sparse_2d_tns("./speedups/synthetic_data/spgemm/tensor_B.tns", 5000, 5000, 0.95)
-    generate_sparse_2d_tns("./speedups/synthetic_data/spgemm/tensor_A.tns", 5000, 5000, 0.95)
-
-    # # spmspv_synthetic
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spmspv/tensor_B.tns", 100, 100000000, 0.95)
-    # generate_sparse_1d_tns("./speedups/synthetic_data/spmspv/tensor_x.tns", 100000000, 0.95)
-
-    # # spmttkrp_synthetic
-    # generate_sparse_3d_tns("./speedups/synthetic_data/spmttkrp/tensor_B.tns", 1000, 1000, 1000, 0.95)
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spmttkrp/tensor_C.tns", 1000, 1000, 0.95)
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spmttkrp/tensor_D.tns", 1000, 1000, 0.95)
-
-    # # spmmh_synthetic
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spmmh/tensor_B.tns", 5000, 5000, 0.95)
-    # generate_dense_2d_tns("./speedups/synthetic_data/spmmh/tensor_C.tns", 5000, 5000)
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spmmh/tensor_D.tns", 5000, 5000, 0.95)
-
-    # #spttspm_synthetic
-    # generate_sparse_3d_tns("./speedups/synthetic_data/spttspm/tensor_B.tns", 500, 500, 500, 0.95)
-    # generate_sparse_2d_tns("./speedups/synthetic_data/spttspm/tensor_C.tns", 500, 500, 0.95)
 
 def generate_phase_ablation_data():
     generate_sparse_2d_tns("./phase_ablation/tensor_B.tns", 50, 50, 0.95)
     generate_sparse_2d_tns("./phase_ablation/tensor_C.tns", 50, 50, 0.95)
 
+def generate_speedup_data(kernel_name: str):
+    if (kernel_name == "spgemm"):
+        generate_sparse_2d_tns("./speedups/synthetic_data/spgemm/tensor_B.tns", 5000, 5000, 0.95)
+        generate_sparse_2d_tns("./speedups/synthetic_data/spgemm/tensor_C.tns", 5000, 5000, 0.95)
+
+    if (kernel_name == "spmmh"):
+        generate_sparse_2d_tns("./speedups/synthetic_data/spmmh/tensor_B.tns", 5000, 5000, 0.95)
+        generate_dense_2d_tns("./speedups/synthetic_data/spmmh/tensor_C.tns", 5000, 5000)
+        generate_sparse_2d_tns("./speedups/synthetic_data/spmmh/tensor_D.tns", 5000, 5000, 0.95)
+
+    if (kernel_name == "spmspv"):
+        generate_sparse_2d_tns("./speedups/synthetic_data/spmspv/tensor_B.tns", 100, 100000000, 0.95)
+        generate_sparse_1d_tns("./speedups/synthetic_data/spmspv/tensor_x.tns", 100000000, 0.95)
+
+    if (kernel_name == "spmttkrp"):
+        generate_sparse_3d_tns("./speedups/synthetic_data/spmttkrp/tensor_B.tns", 1000, 1000, 1000, 0.95)
+        generate_sparse_2d_tns("./speedups/synthetic_data/spmttkrp/tensor_C.tns", 1000, 1000, 0.95)
+        generate_sparse_2d_tns("./speedups/synthetic_data/spmttkrp/tensor_D.tns", 1000, 1000, 0.95)
+
+    if (kernel_name == "spttspm"):
+        generate_sparse_3d_tns("./speedups/synthetic_data/spttspm/tensor_B.tns", 500, 500, 500, 0.95)
+        generate_sparse_2d_tns("./speedups/synthetic_data/spttspm/tensor_C.tns", 500, 500, 0.95)
+
+def generate_spgemm_speedup_data():
+    generate_speedup_data("spgemm")
+
+def generate_spmmh_speedup_data():
+    generate_speedup_data("spmmh")
+
+def generate_spmspv_speedup_data():
+    generate_speedup_data("spmspv")
+
+def generate_spmttkrp_speedup_data():
+    generate_speedup_data("spmttkrp")
+
+def generate_spttspm_speedup_data():
+    generate_speedup_data("spttspm")
+
 # Maps an experiment directory name (as passed on the command line by
 # run.sh) to the function that generates its tensor data.
 EXPERIMENTS = {
-    "spgemm_synthetic": generate_spgemm_synthetic_data,
     "phase_ablation": generate_phase_ablation_data,
+    "spgemm_speedup": generate_spgemm_speedup_data,
+    "spmmh_speedup": generate_spmmh_speedup_data,
+    "spmspv_speedup": generate_spmspv_speedup_data,
+    "spmttkrp_speedup": generate_spmttkrp_speedup_data,
+    "spttspm_speedup": generate_spttspm_speedup_data,
 }
 
 def main():

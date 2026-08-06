@@ -39,14 +39,25 @@ llvm.func external @fopen(!llvm.ptr, !llvm.ptr) -> !llvm.ptr attributes {llvm.em
 llvm.func external @fprintf(!llvm.ptr, !llvm.ptr, ...) -> i32 attributes {llvm.emit_c_interface}
 llvm.func external @fclose(!llvm.ptr) -> i32 attributes {llvm.emit_c_interface}
 
+// perf_helper.c: in-process hardware counter reads, scoped to exactly the
+// bracketed region (see perf_helper.c for why this needs a grouped
+// perf_event_open() rather than wrapping the whole binary in `perf stat`).
+func.func private @pe_init() -> i64
+func.func private @pe_reset_enable() -> ()
+func.func private @pe_disable() -> ()
+func.func private @pe_read(i32) -> i64
+func.func private @pe_close() -> ()
+
 // ---------------------------------------------------------------------------
 // 3. File-name Globals (null-terminated)
 // ---------------------------------------------------------------------------
 llvm.mlir.global internal constant @fileB("tensor_B.tns\00")
 llvm.mlir.global internal constant @fileC("tensor_C.tns\00")
 llvm.mlir.global internal constant @benchmarkFile("benchmark\00")
+llvm.mlir.global internal constant @tmaFile("tma_raw\00")
 llvm.mlir.global internal constant @mode_w("w\00")
 llvm.mlir.global internal constant @fmt_time("%f\n\00")
+llvm.mlir.global internal constant @fmt_tma("%lld %lld %lld %lld %lld %lld %lld %lld\n\00")
 
 // ---------------------------------------------------------------------------
 // 4. SpGEMM Kernel
@@ -114,7 +125,7 @@ func.func @main() {
 
   %c0    = arith.constant 0 : index
   %c1    = arith.constant 1 : index
-  %iters = arith.constant 5 : index
+  %iters = arith.constant 6 : index
 
   // ==========================================
   // Correctness check: compute one result and print it
@@ -128,21 +139,66 @@ func.func @main() {
   bufferization.dealloc_tensor %ref_result : tensor<?x?xf64>
 
   // ==========================================
-  // Benchmark SpGEMM: run 25 iterations, collect times, write to file
+  // Benchmark SpGEMM: run `iters` iterations, collect per-iteration times
+  // AND per-iteration hardware counters (scoped to just the @spgemm call
+  // via perf_helper.c), write both to file.
   // ==========================================
+  %c2 = arith.constant 2 : index
+  %c3 = arith.constant 3 : index
+  %c4 = arith.constant 4 : index
+  %c5 = arith.constant 5 : index
+  %c6 = arith.constant 6 : index
+  %c7 = arith.constant 7 : index
+
+  %i32_0 = arith.constant 0 : i32
+  %i32_1 = arith.constant 1 : i32
+  %i32_2 = arith.constant 2 : i32
+  %i32_3 = arith.constant 3 : i32
+  %i32_4 = arith.constant 4 : i32
+  %i32_5 = arith.constant 5 : i32
+  %i32_6 = arith.constant 6 : i32
+  %i32_7 = arith.constant 7 : i32
+
+  %pe_ok = func.call @pe_init() : () -> i64
+
   %times = memref.alloc() : memref<25xf64>
+  // Columns: 0=slots 1=retiring 2=bad_spec 3=fe_bound 4=be_bound 5=instructions
+  // 6=cycles 7=branch_misses
+  %tma_raw = memref.alloc() : memref<25x8xi64>
 
   scf.for %iter = %c0 to %iters step %c1 {
     %start_iter = func.call @rtclock() : () -> f64
+    func.call @pe_reset_enable() : () -> ()
     %res = func.call @spgemm(%B, %C)
       : (tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>) -> tensor<?x?xf64>
+    func.call @pe_disable() : () -> ()
     %end_iter = func.call @rtclock() : () -> f64
     %elapsed_iter = arith.subf %end_iter, %start_iter : f64
     func.call @printF64(%elapsed_iter) : (f64) -> ()
     func.call @printNewline() : () -> ()
     memref.store %elapsed_iter, %times[%iter] : memref<25xf64>
+
+    %v0 = func.call @pe_read(%i32_0) : (i32) -> i64
+    %v1 = func.call @pe_read(%i32_1) : (i32) -> i64
+    %v2 = func.call @pe_read(%i32_2) : (i32) -> i64
+    %v3 = func.call @pe_read(%i32_3) : (i32) -> i64
+    %v4 = func.call @pe_read(%i32_4) : (i32) -> i64
+    %v5 = func.call @pe_read(%i32_5) : (i32) -> i64
+    %v6 = func.call @pe_read(%i32_6) : (i32) -> i64
+    %v7 = func.call @pe_read(%i32_7) : (i32) -> i64
+    memref.store %v0, %tma_raw[%iter, %c0] : memref<25x8xi64>
+    memref.store %v1, %tma_raw[%iter, %c1] : memref<25x8xi64>
+    memref.store %v2, %tma_raw[%iter, %c2] : memref<25x8xi64>
+    memref.store %v3, %tma_raw[%iter, %c3] : memref<25x8xi64>
+    memref.store %v4, %tma_raw[%iter, %c4] : memref<25x8xi64>
+    memref.store %v5, %tma_raw[%iter, %c5] : memref<25x8xi64>
+    memref.store %v6, %tma_raw[%iter, %c6] : memref<25x8xi64>
+    memref.store %v7, %tma_raw[%iter, %c7] : memref<25x8xi64>
+
     bufferization.dealloc_tensor %res : tensor<?x?xf64>
   }
+
+  func.call @pe_close() : () -> ()
 
   // Write times to file
   %file_ptr = llvm.mlir.addressof @benchmarkFile : !llvm.ptr
@@ -158,6 +214,29 @@ func.func @main() {
   %dummy_close = llvm.call @fclose(%fp) : (!llvm.ptr) -> i32
 
   memref.dealloc %times : memref<25xf64>
+
+  // Write per-iteration raw hardware counters to file
+  %tma_file_ptr = llvm.mlir.addressof @tmaFile : !llvm.ptr
+  %tma_fp = llvm.call @fopen(%tma_file_ptr, %mode) : (!llvm.ptr, !llvm.ptr) -> !llvm.ptr
+  %tma_format = llvm.mlir.addressof @fmt_tma : !llvm.ptr
+
+  scf.for %iter = %c0 to %iters step %c1 {
+    %r0 = memref.load %tma_raw[%iter, %c0] : memref<25x8xi64>
+    %r1 = memref.load %tma_raw[%iter, %c1] : memref<25x8xi64>
+    %r2 = memref.load %tma_raw[%iter, %c2] : memref<25x8xi64>
+    %r3 = memref.load %tma_raw[%iter, %c3] : memref<25x8xi64>
+    %r4 = memref.load %tma_raw[%iter, %c4] : memref<25x8xi64>
+    %r5 = memref.load %tma_raw[%iter, %c5] : memref<25x8xi64>
+    %r6 = memref.load %tma_raw[%iter, %c6] : memref<25x8xi64>
+    %r7 = memref.load %tma_raw[%iter, %c7] : memref<25x8xi64>
+    %dummy_tma = llvm.call @fprintf(%tma_fp, %tma_format, %r0, %r1, %r2, %r3, %r4, %r5, %r6, %r7)
+      {var_callee_type = !llvm.func<i32 (ptr, ptr, ...)>}
+      : (!llvm.ptr, !llvm.ptr, i64, i64, i64, i64, i64, i64, i64, i64) -> i32
+  }
+
+  %tma_dummy_close = llvm.call @fclose(%tma_fp) : (!llvm.ptr) -> i32
+
+  memref.dealloc %tma_raw : memref<25x8xi64>
 
   bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSR>
   bufferization.dealloc_tensor %C : tensor<?x?xf64, #CSC>

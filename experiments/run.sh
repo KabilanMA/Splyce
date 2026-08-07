@@ -17,7 +17,11 @@
 # (in speedups/synthetic_data/speedup_results.csv) every configuration's
 # runtime — one row per (kernel, configuration) pair, not just the
 # fastest. phase_ablation instead writes its own richer TMA breakdown
-# (phase_ablation/tma_results.csv) — see its own run.sh.
+# (phase_ablation/tma_results.csv), multicore its own core-count scaling
+# results (multicore/results.csv), sparsity_scaling its own density-sweep
+# results (sparsity_scaling/results.csv), and vector_width its own
+# vector-width-sweep results (vector_width/results.csv) — see each one's
+# own run.sh.
 #
 # Add new experiment names to EXPERIMENTS (and their directory in
 # EXPERIMENT_DIR) as they're set up — each needs a compile.sh and a run.sh,
@@ -30,15 +34,21 @@ cd "$SCRIPT_DIR"
 
 EXPERIMENTS=(
 #   phase_ablation
-  spgemm_speedup
-  spmmh_speedup
-  spmspv_speedup
-  spmttkrp_speedup
-  spttspm_speedup
+  # multicore
+  # sparsity_scaling
+  vector_width
+  # spgemm_speedup
+  # spmmh_speedup
+  # spmspv_speedup
+  # spmttkrp_speedup
+  # spttspm_speedup
 )
 
 declare -A EXPERIMENT_DIR=(
   [phase_ablation]="phase_ablation"
+  [multicore]="multicore"
+  [sparsity_scaling]="sparsity_scaling"
+  [vector_width]="vector_width"
   [spgemm_speedup]="speedups/synthetic_data/spgemm"
   [spmmh_speedup]="speedups/synthetic_data/spmmh"
   [spmspv_speedup]="speedups/synthetic_data/spmspv"
@@ -63,7 +73,7 @@ for experiment in "${EXPERIMENTS[@]}"; do
   ( cd "$exp_dir" && ./compile.sh )
 
   echo "[$experiment] Running ..."
-  if [[ "$experiment" == "phase_ablation" ]]; then
+  if [[ "$experiment" == "phase_ablation" || "$experiment" == "multicore" || "$experiment" == "sparsity_scaling" || "$experiment" == "vector_width" ]]; then
     ( cd "$exp_dir" && ./run.sh --clean )
   else
     ( cd "$exp_dir" && ./run.sh --clean "$SPEEDUP_RESULTS" )

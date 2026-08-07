@@ -114,7 +114,7 @@ func.func @main() {
 
   %c0    = arith.constant 0 : index
   %c1    = arith.constant 1 : index
-  %iters = arith.constant 4 : index
+  %iters = arith.constant 6 : index
 
   // ==========================================
   // Correctness check: compute one result and print it

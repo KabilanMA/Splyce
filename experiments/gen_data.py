@@ -190,10 +190,45 @@ def generate_spmttkrp_speedup_data():
 def generate_spttspm_speedup_data():
     generate_speedup_data("spttspm")
 
+def generate_multicore_data():
+    # Same shape/sparsity as speedups/synthetic_data/spmttkrp — this
+    # experiment reuses that kernel's compiled-for-parallel-execution
+    # binaries (see multicore/compile.sh) for a core-count scaling
+    # study, not a different dataset.
+    generate_sparse_3d_tns("./multicore/tensor_B.tns", 1000, 1000, 1000, 0.95)
+    generate_sparse_2d_tns("./multicore/tensor_C.tns", 1000, 1000, 0.95)
+    generate_sparse_2d_tns("./multicore/tensor_D.tns", 1000, 1000, 0.95)
+
+def generate_sparsity_scaling_data(sparsity_pct="1"):
+    # Same 5000x5000 shape as speedups/synthetic_data/spgemm — this
+    # experiment reuses that dimension but sweeps sparsity instead of
+    # holding it fixed at 0.95. sparsity_pct is the *nonzero density*, in
+    # percent (e.g. "0.01", "1", "10" — see sparsity_scaling/run.sh, which
+    # regenerates data at each sweep point via this function before running
+    # both of sparsity_scaling/compile.sh's binaries against it).
+    sparsity = 1.0 - (float(sparsity_pct) / 100.0)
+    generate_sparse_2d_tns("./sparsity_scaling/tensor_B.tns", 5000, 5000, sparsity)
+    generate_sparse_2d_tns("./sparsity_scaling/tensor_C.tns", 5000, 5000, sparsity)
+
+def generate_vector_width_data(sparsity_pct="1"):
+    # Same 5000x5000 shape and sparsity_pct convention as
+    # generate_sparsity_scaling_data — see vector_width/run.sh, which
+    # regenerates data at each sweep point (1%, 5%, 10%) via this function
+    # before running all 5 of vector_width/compile.sh's binaries against it.
+    sparsity = 1.0 - (float(sparsity_pct) / 100.0)
+    generate_sparse_2d_tns("./vector_width/tensor_B.tns", 5000, 5000, sparsity)
+    generate_sparse_2d_tns("./vector_width/tensor_C.tns", 5000, 5000, sparsity)
+
 # Maps an experiment directory name (as passed on the command line by
-# run.sh) to the function that generates its tensor data.
+# run.sh) to the function that generates its tensor data. Any CLI arguments
+# after the experiment name are forwarded to the generator (only
+# generate_sparsity_scaling_data and generate_vector_width_data currently
+# take any).
 EXPERIMENTS = {
     "phase_ablation": generate_phase_ablation_data,
+    "multicore": generate_multicore_data,
+    "sparsity_scaling": generate_sparsity_scaling_data,
+    "vector_width": generate_vector_width_data,
     "spgemm_speedup": generate_spgemm_speedup_data,
     "spmmh_speedup": generate_spmmh_speedup_data,
     "spmspv_speedup": generate_spmspv_speedup_data,
@@ -203,7 +238,7 @@ EXPERIMENTS = {
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 gen_data.py <experiment_name>")
+        print("Usage: python3 gen_data.py <experiment_name> [generator_args...]")
         print(f"Available experiments: {', '.join(EXPERIMENTS)}")
         sys.exit(1)
 
@@ -214,7 +249,7 @@ def main():
         print(f"Available experiments: {', '.join(EXPERIMENTS)}")
         sys.exit(1)
 
-    generator()
+    generator(*sys.argv[2:])
 
 if __name__ == "__main__":
     main()

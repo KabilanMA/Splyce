@@ -149,8 +149,8 @@ def generate_sparse_2d_tns_col_sparsity(filename, rows, cols, sparsity):
 
 
 def generate_phase_ablation_data():
-    generate_sparse_2d_tns("./phase_ablation/tensor_B.tns", 50, 50, 0.95)
-    generate_sparse_2d_tns("./phase_ablation/tensor_C.tns", 50, 50, 0.95)
+    generate_sparse_2d_tns("./phase_ablation/tensor_B.tns", 5000, 5000, 0.95)
+    generate_sparse_2d_tns("./phase_ablation/tensor_C.tns", 5000, 5000, 0.95)
 
 def generate_speedup_data(kernel_name: str):
     if (kernel_name == "spgemm"):

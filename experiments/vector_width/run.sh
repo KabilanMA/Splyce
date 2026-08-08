@@ -17,6 +17,12 @@
 # iterations, excluding the first/cold-start one) is appended to
 # results.csv.
 #
+# Once every sparsity level is done and results.csv is fully written, this
+# also prints the results table (print_results.py) and regenerates
+# vector_width_speedup_plot.png (plot_results.py — which also prints the
+# speedup at each vector-width/sparsity combination the plot is drawn
+# from, since the image itself isn't visible from a terminal).
+#
 # Usage:
 #   ./run.sh [--clean] [results_csv]
 #     --clean       Delete the compile.sh-generated binaries afterward.
@@ -121,6 +127,14 @@ for sparsity_pct in "${SPARSITY_LEVELS[@]}"; do
 done
 
 rm -f ./tensor_B.tns ./tensor_C.tns
+
+echo ""
+echo "Results (${RESULTS_CSV}):"
+python3 ./print_results.py "$RESULTS_CSV"
+
+echo ""
+echo "Generating plot ..."
+./plot_results.py --csv "$RESULTS_CSV"
 
 if [[ $CLEAN -eq 1 ]]; then
   echo "Cleaning up compiled binaries ..."

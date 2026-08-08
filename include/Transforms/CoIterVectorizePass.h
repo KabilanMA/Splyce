@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 #ifndef TRANSFORMS_SPLYCE_VECTORIZE_PASS_H
 #define TRANSFORMS_SPLYCE_VECTORIZE_PASS_H
 

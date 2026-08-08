@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 #ifndef TRANSFORMS_SPLYCE_BUFFERIZATION_PREP_PASS_H
 #define TRANSFORMS_SPLYCE_BUFFERIZATION_PREP_PASS_H
 
@@ -6,15 +8,11 @@
 
 namespace mlir {
 
-// Creates the pass that stamps the restrict attribute on every
-// bufferization.to_tensor op found in the IR.
-//
-// The MLIR sparse lowering pipeline omits restrict from to_tensor ops.
-// One-shot-bufferize requires it for in-place bufferization of return tensors.
-// This pass inserts the attribute before the bufferization pipeline runs.
-//
-// To disable the transformation without removing the pass from the pipeline,
-// comment out the markToTensorRestrict() call in runOnOperation().
+// Creates the pass that stamps `restrict` onto every bufferization.to_tensor
+// op so one-shot-bufferize can bufferize return tensors in place (see the
+// AddRestrictToTensor pass in Passes.td for the full rationale). To disable
+// it without removing the pass from the pipeline, comment out the
+// markToTensorRestrict() call in runOnOperation().
 std::unique_ptr<Pass> createAddRestrictToTensorPass();
 
 // Registers the pass for --splyce-bufferize-restrict CLI availability.

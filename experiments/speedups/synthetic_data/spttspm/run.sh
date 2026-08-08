@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # run.sh — Run every binary compiled by compile.sh in this directory (the
-# plain mlir-opt --sparsifier baseline, plus one per Splyce phase-select/
-# fastmath configuration), and for each one append its median execution
-# time across its 6 iterations (excluding the first, cold-start iteration)
-# to a shared results file — one row per configuration, so every runtime is
+# plain mlir-opt --sparsifier baseline, plus the single Splyce phase-001
+# binary), and for each one appends its median execution time across its 6
+# iterations (excluding the first, cold-start iteration) to results.csv (in
+# this directory) — one row per configuration, so every runtime is
 # reported, not just the fastest.
 #
 # Usage:
 #   ./run.sh [--clean] [results_csv]
 #     --clean       Delete the compile.sh-generated binaries afterward.
-#     results_csv   Path to append "<kernel>,<config>,<time_s>" rows to.
-#                    Defaults to ../speedup_results.csv (relative to this
-#                    directory) if omitted.
+#     results_csv   Path to write "kernel,configuration,exec_time_s" rows
+#                    to. Defaults to ./results.csv (this directory) if
+#                    omitted.
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 KERNEL_NAME="spttspm"
 
 CLEAN=0
-RESULTS_CSV="../speedup_results.csv"
+RESULTS_CSV="./results.csv"
 for arg in "$@"; do
   if [[ "$arg" == "--clean" ]]; then
     CLEAN=1
@@ -29,6 +29,8 @@ for arg in "$@"; do
     RESULTS_CSV="$arg"
   fi
 done
+
+echo "kernel,configuration,exec_time_s" > "$RESULTS_CSV"
 
 # ---------------------------------------------------------------------------
 # NUMA/CPU pinning for this machine (see phase_ablation/run.sh for details).

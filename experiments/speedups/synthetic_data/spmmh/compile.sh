@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# compile.sh — Compile spmmh.mlir (this directory) into one Splyce-
-# vectorized binary per phase-select combination (000-111) (with and
-# without --splyce-fastmath), plus a plain mlir-opt --sparsifier baseline
-# binary with no Splyce vectorization at all — 17 binaries in total.
+# compile.sh — Compile spmmh.mlir (this directory) into:
+#   - a plain mlir-opt --sparsifier baseline binary (no Splyce vectorization)
+#   - one Splyce-vectorized binary: phase-select 001, vector-width 4, no
+#     --splyce-fastmath
 #
 # This script only compiles; it's meant to be driven by another script that
 # runs/benchmarks the resulting binaries.
 #
 # Binaries are written to:
 #   ./test_benchmark_spmmh_scf
-#   ./test_benchmark_spmmh_splyce_phase_<XYZ>
-#   ./test_benchmark_spmmh_splyce_phase_<XYZ>_fastmath
+#   ./test_benchmark_spmmh_splyce_phase_001
 #
 # Prerequisites: LLVM_INSTALL set, mlir-opt/clang on $PATH, build/bin/splyce-opt
 # and build/bin/splyce-translate built (see repo README).
@@ -101,61 +100,37 @@ echo "[baseline] Compiling binary ..."
 compile_llvm_mlir "./${TARGET_FUNCTION}_llvm_scf.mlir" "./test_benchmark_${TARGET_FUNCTION}_scf"
 
 # ---------------------------------------------------------------------------
-# 3. Splyce, all 8 phase-select combinations, with and without --splyce-fastmath
+# 3. Splyce, phase-select 001, vector-width 4, no --splyce-fastmath
 # ---------------------------------------------------------------------------
-PHASES=(000 001 010 011 100 101 110 111)
+PHASE="001"
 
-for phase in "${PHASES[@]}"; do
-  echo "[phase=$phase] Applying Splyce vectorization ..."
-  "$SPLYCE_OPT" "./${TARGET_FUNCTION}_scf.mlir" \
-    "--splyce=target-function=${TARGET_FUNCTION} vector-width=4 phase-select=${phase}" \
-    --splyce-bufferize-restrict \
-    -o "./${TARGET_FUNCTION}_splyce_phase_${phase}.mlir"
+echo "[phase=$PHASE] Applying Splyce vectorization ..."
+"$SPLYCE_OPT" "./${TARGET_FUNCTION}_scf.mlir" \
+  "--splyce=target-function=${TARGET_FUNCTION} vector-width=4 phase-select=${PHASE}" \
+  --splyce-bufferize-restrict \
+  -o "./${TARGET_FUNCTION}_splyce_phase_${PHASE}.mlir"
 
-  echo "[phase=$phase] Lowering to LLVM dialect ..."
-  mlir-opt "./${TARGET_FUNCTION}_splyce_phase_${phase}.mlir" \
-    "${COMMON_LOWER_FLAGS[@]}" \
-    -o "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}.mlir"
+echo "[phase=$PHASE] Lowering to LLVM dialect ..."
+mlir-opt "./${TARGET_FUNCTION}_splyce_phase_${PHASE}.mlir" \
+  "${COMMON_LOWER_FLAGS[@]}" \
+  -o "./${TARGET_FUNCTION}_llvm_splyce_phase_${PHASE}.mlir"
 
-  echo "[phase=$phase] Compiling binary ..."
-  compile_llvm_mlir "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}.mlir" \
-    "./test_benchmark_${TARGET_FUNCTION}_splyce_phase_${phase}"
-
-  echo "[phase=$phase, fastmath] Applying Splyce vectorization + fastmath ..."
-  "$SPLYCE_OPT" "./${TARGET_FUNCTION}_scf.mlir" \
-    "--splyce=target-function=${TARGET_FUNCTION} vector-width=4 phase-select=${phase}" \
-    --splyce-bufferize-restrict \
-    --splyce-fastmath \
-    -o "./${TARGET_FUNCTION}_splyce_phase_${phase}_fastmath.mlir"
-
-  echo "[phase=$phase, fastmath] Lowering to LLVM dialect ..."
-  mlir-opt "./${TARGET_FUNCTION}_splyce_phase_${phase}_fastmath.mlir" \
-    "${COMMON_LOWER_FLAGS[@]}" \
-    -o "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}_fastmath.mlir"
-
-  echo "[phase=$phase, fastmath] Compiling binary ..."
-  compile_llvm_mlir "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}_fastmath.mlir" \
-    "./test_benchmark_${TARGET_FUNCTION}_splyce_phase_${phase}_fastmath"
-done
+echo "[phase=$PHASE] Compiling binary ..."
+compile_llvm_mlir "./${TARGET_FUNCTION}_llvm_splyce_phase_${PHASE}.mlir" \
+  "./test_benchmark_${TARGET_FUNCTION}_splyce_phase_${PHASE}"
 
 # ---------------------------------------------------------------------------
 # Cleanup: remove all generated intermediate files, keep only binaries
 # ---------------------------------------------------------------------------
 echo "Cleaning up intermediate files ..."
-rm -f "./${TARGET_FUNCTION}_scf.mlir" "./${TARGET_FUNCTION}_llvm_scf.mlir" "./${TARGET_FUNCTION}_llvm_scf.ll"
-for phase in "${PHASES[@]}"; do
-  rm -f \
-    "./${TARGET_FUNCTION}_splyce_phase_${phase}.mlir" \
-    "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}.mlir" \
-    "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}.ll" \
-    "./${TARGET_FUNCTION}_splyce_phase_${phase}_fastmath.mlir" \
-    "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}_fastmath.mlir" \
-    "./${TARGET_FUNCTION}_llvm_splyce_phase_${phase}_fastmath.ll"
-done
+rm -f \
+  "./${TARGET_FUNCTION}_scf.mlir" \
+  "./${TARGET_FUNCTION}_llvm_scf.mlir" \
+  "./${TARGET_FUNCTION}_llvm_scf.ll" \
+  "./${TARGET_FUNCTION}_splyce_phase_${PHASE}.mlir" \
+  "./${TARGET_FUNCTION}_llvm_splyce_phase_${PHASE}.mlir" \
+  "./${TARGET_FUNCTION}_llvm_splyce_phase_${PHASE}.ll"
 
 echo "Done. Binaries:"
 echo "  $(pwd)/test_benchmark_${TARGET_FUNCTION}_scf"
-for phase in "${PHASES[@]}"; do
-  echo "  $(pwd)/test_benchmark_${TARGET_FUNCTION}_splyce_phase_${phase}"
-  echo "  $(pwd)/test_benchmark_${TARGET_FUNCTION}_splyce_phase_${phase}_fastmath"
-done
+echo "  $(pwd)/test_benchmark_${TARGET_FUNCTION}_splyce_phase_${PHASE}"

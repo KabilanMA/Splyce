@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 #ifndef TRANSFORM_SPLYCE_PATTERN_H
 #define TRANSFORM_SPLYCE_PATTERN_H
 
@@ -86,7 +88,7 @@ struct CoIterDescriptor {
     bool isScatterPattern = false;
 
     // For scatter patterns: the output memref written by the scf.if body,
-    // and the "free" index (not one of this loop's iter-args — e.g. an
+    // and the "free" index (not one of this loop's iter-args - e.g. an
     // enclosing scf.for's induction variable) used as its second subscript
     // alongside the matched (driver-stream) coordinate.
     Value outputMemref;
@@ -108,47 +110,26 @@ struct CoIterDescriptor {
     bool hasExtraScalarFactor() const { return static_cast<bool>(extraScalarFactor); }
 };
 
-// tryMatchCoIter
+// Recognizes the N-way co-iteration idiom inside `whileOp` and, on success,
+// returns a CoIterDescriptor describing it (nullopt if it doesn't match).
 //
-// Attempts to recognise the N-way co-iteration idiom inside `whileOp`.
-// Returns a populated CoIterDescriptor on success, std::nullopt otherwise.
+// Looks for: an AND-tree of `cmpi ult` range checks in the condition block,
+// one per stream (N >= 2), each comparing an index-typed BlockArgument
+// against an upper bound; N matching coordinate loads in the do-block, plus
+// a global min over them (a chain of arith.minui/arith.select); an scf.if
+// gated on all N coords == that min; N float loads inside the scf.if
+// feeding either a loop-carried accumulator (the scf.if yields a float that
+// shows up in the do-block's scf.yield) or a direct scatter-store into an
+// output memref (the scf.if has no results, and its body does a
+// load/accumulate/store round-trip instead) - exactly one of
+// hasAccumulator() / isScatterPattern ends up set. Either way, the
+// per-match term must be a left-associative arith.mulf tree whose leaves
+// are exactly the N stream values plus at most one extra loop-invariant
+// scalar (desc.extraScalarFactor, e.g. a third contraction operand that
+// doesn't vary with this co-iteration). Finally, the do-block's scf.yield
+// must advance each stream's iter var via arith.select/arith.addi.
 //
-// Recognition criteria (all must hold):
-//
-//  (1) Condition block terminates with scf.condition.
-//
-//  (2) The condition value is a left-associative AND-tree of `cmpi ult` ops:
-//        %c0  = cmpi ult, %i0, %end0
-//        %c1  = cmpi ult, %i1, %end1
-//        %c01 = andi %c0, %c1   ...
-//      Each leaf's LHS must be a BlockArgument of index type. N = leaf count, N >= 2.
-//
-//  (3) The do-block has exactly N index-typed memref.loads, each indexed by
-//      one of the N loop-carried stream iter vars.
-//
-//  (4) The do-block contains a global minimum over all N coordinates
-//      (chain of arith.minui or arith.select ops covering all loads).
-//
-//  (5) The do-block has one scf.if whose condition is the AND of N
-//      `cmpi eq, coord_k, globalMin` comparisons.
-//
-//  (6) The scf.if true-block contains exactly N float-typed value loads
-//      (one per stream), and the kernel result is either:
-//        (a) accumulator pattern — the scf.if yields a float that appears
-//            as a non-index value in the do-block's scf.yield, or
-//        (b) scatter pattern — the scf.if has no results; instead its
-//            true-block does a load/accumulate/store round-trip directly
-//            into an output memref, indexed by [matchedCoord, freeIndex].
-//      Exactly one of hasAccumulator() / isScatterPattern is set on success.
-//
-//  (6 cont.) The per-match term (the accumulator's addend, or the scatter
-//      store's addend) must be a left-associative arith.mulf tree whose
-//      leaves are exactly the N stream value loads plus at most one extra
-//      loop-invariant scalar (desc.extraScalarFactor) — e.g. a third
-//      contraction operand that doesn't vary with this co-iteration.
-//
-//  (7) The do-block's scf.yield carries N index values each derivable
-//      from the corresponding iter var via arith.select / arith.addi.
+// See matchConditionBlock/matchDoBlock for the actual matching logic.
 std::optional<CoIterDescriptor> tryMatchCoIter(scf::WhileOp whileOp);
 
 } // namespace splyce

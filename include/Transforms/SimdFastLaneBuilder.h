@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // SimdFastLaneBuilder.h
 //
 // Emits the SIMD fast-lane loop for the co-iteration vectorization pass.

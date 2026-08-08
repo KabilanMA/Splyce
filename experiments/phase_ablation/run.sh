@@ -34,6 +34,10 @@
 # cycle-accurate profiling — set NUMA_NODE to override which node (default
 # 0).
 #
+# Once every binary has been run and tma_results.csv is fully written, this
+# also prints the TMA breakdown table (print_results.py) and regenerates
+# tma_breakdown_plot.png (plot_results.py).
+#
 # Usage:
 #   ./run.sh            Run binaries, keep the compiled binaries afterward.
 #   ./run.sh --clean    Run binaries, then delete the compile.sh-generated
@@ -143,6 +147,14 @@ for bin in ./test_benchmark_*; do
 
   echo "${name},${retiring},${be},${fe},${badspec},${brmiss},${exec_time},${exec_min},${exec_max},${exec_stdev},${instr},${ipc}" >> "$TMA_CSV"
 done
+
+echo ""
+echo "TMA results (${TMA_CSV}):"
+python3 ./print_results.py
+
+echo ""
+echo "Generating plot ..."
+./plot_results.py
 
 if [[ $CLEAN -eq 1 ]]; then
   echo "Cleaning up compiled binaries ..."

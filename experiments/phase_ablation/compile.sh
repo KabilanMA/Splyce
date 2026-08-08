@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # compile.sh — Compile spgemm.mlir (this directory) into:
 #   - a plain mlir-opt baseline binary (no Splyce vectorization)
-#   - one Splyce-vectorized binary per phase-select combination (000-111)
-#   - the same 8 phase-select combinations again, with --splyce-fastmath
+#   - one Splyce-vectorized binary per phase-select combination (000-111),
+#     no --splyce-fastmath
 #
 # This script only compiles; it's meant to be driven by another script that
 # runs/benchmarks the resulting binaries.
@@ -10,7 +10,6 @@
 # Binaries are written to:
 #   ./test_benchmark_spgemm_scf
 #   ./test_benchmark_spgemm_splyce_phase_<XYZ>
-#   ./test_benchmark_spgemm_splyce_phase_<XYZ>_fastmath
 #
 # Prerequisites: LLVM_INSTALL set, mlir-opt/clang on $PATH, build/bin/splyce-opt
 # and build/bin/splyce-translate built (see repo README).
@@ -105,7 +104,7 @@ echo "[baseline] Compiling binary ..."
 compile_llvm_mlir ./spgemm_llvm_scf.mlir ./test_benchmark_spgemm_scf
 
 # ---------------------------------------------------------------------------
-# 3. Splyce, all 8 phase-select combinations, with and without --splyce-fastmath
+# 3. Splyce, all 8 phase-select combinations, no --splyce-fastmath
 # ---------------------------------------------------------------------------
 PHASES=(000 001 010 011 100 101 110 111)
 
@@ -124,22 +123,6 @@ for phase in "${PHASES[@]}"; do
   echo "[phase=$phase] Compiling binary ..."
   compile_llvm_mlir "./spgemm_llvm_splyce_phase_${phase}.mlir" \
     "./test_benchmark_spgemm_splyce_phase_${phase}"
-
-  echo "[phase=$phase, fastmath] Applying Splyce vectorization + fastmath ..."
-  "$SPLYCE_OPT" ./spgemm_scf.mlir \
-    "--splyce=target-function=spgemm vector-width=4 phase-select=${phase}" \
-    --splyce-bufferize-restrict \
-    --splyce-fastmath \
-    -o "./spgemm_splyce_phase_${phase}_fastmath.mlir"
-
-  echo "[phase=$phase, fastmath] Lowering to LLVM dialect ..."
-  mlir-opt "./spgemm_splyce_phase_${phase}_fastmath.mlir" \
-    "${COMMON_LOWER_FLAGS[@]}" \
-    -o "./spgemm_llvm_splyce_phase_${phase}_fastmath.mlir"
-
-  echo "[phase=$phase, fastmath] Compiling binary ..."
-  compile_llvm_mlir "./spgemm_llvm_splyce_phase_${phase}_fastmath.mlir" \
-    "./test_benchmark_spgemm_splyce_phase_${phase}_fastmath"
 done
 
 # ---------------------------------------------------------------------------
@@ -151,15 +134,11 @@ for phase in "${PHASES[@]}"; do
   rm -f \
     "./spgemm_splyce_phase_${phase}.mlir" \
     "./spgemm_llvm_splyce_phase_${phase}.mlir" \
-    "./spgemm_llvm_splyce_phase_${phase}.ll" \
-    "./spgemm_splyce_phase_${phase}_fastmath.mlir" \
-    "./spgemm_llvm_splyce_phase_${phase}_fastmath.mlir" \
-    "./spgemm_llvm_splyce_phase_${phase}_fastmath.ll"
+    "./spgemm_llvm_splyce_phase_${phase}.ll"
 done
 
 echo "Done. Binaries:"
 echo "  $(pwd)/test_benchmark_spgemm_scf"
 for phase in "${PHASES[@]}"; do
   echo "  $(pwd)/test_benchmark_spgemm_splyce_phase_${phase}"
-  echo "  $(pwd)/test_benchmark_spgemm_splyce_phase_${phase}_fastmath"
 done

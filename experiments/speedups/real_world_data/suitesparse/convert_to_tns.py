@@ -40,6 +40,18 @@ import glob
 import shutil
 
 
+def drop_explicit_zeros(entries):
+    # Some matrices (e.g. FEM assembly matrices) store explicit zeros to
+    # preserve a fixed sparsity pattern — these are stored entries per the
+    # .mtx header's declared count, but aren't real nonzeros, so
+    # SuiteSparse's own nnz metadata excludes them. Comment out the call to
+    # this function in convert_mtx_to_tns to keep explicit zeros instead of
+    # dropping them.
+    kept = [(r, c, val) for r, c, val in entries if val != 0.0]
+    dropped = len(entries) - len(kept)
+    return kept, dropped
+
+
 def convert_mtx_to_tns(mtx_path, tns_path):
     with open(mtx_path) as f:
         lines = f.readlines()
@@ -67,13 +79,7 @@ def convert_mtx_to_tns(mtx_path, tns_path):
     rows, cols, nnz_declared = (int(t) for t in lines[idx].split())
     idx += 1
 
-    # Some matrices (e.g. FEM assembly matrices) store explicit zeros to
-    # preserve a fixed sparsity pattern — these are stored entries per the
-    # header's declared count, but aren't real nonzeros, so SuiteSparse's
-    # own nnz metadata excludes them. Drop them here too rather than
-    # writing meaningless zero-valued entries into a "sparse" tensor.
     raw_count = 0
-    dropped_zeros = 0
     entries = []
     for line in lines[idx:]:
         line = line.strip()
@@ -83,12 +89,12 @@ def convert_mtx_to_tns(mtx_path, tns_path):
         r, c = int(parts[0]), int(parts[1])
         val = 1.0 if is_pattern else float(parts[2])
         raw_count += 1
-        if val == 0.0:
-            dropped_zeros += 1
-            continue
         entries.append((r, c, val))
         if (is_symmetric or is_skew) and r != c:
             entries.append((c, r, -val if is_skew else val))
+
+    dropped_zeros = 0
+    # entries, dropped_zeros = drop_explicit_zeros(entries)  # comment out to keep explicit zeros
 
     if raw_count != nnz_declared:
         raise ValueError(

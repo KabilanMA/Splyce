@@ -121,7 +121,7 @@ func.func @main() {
 
   %c0    = arith.constant 0 : index
   %c1    = arith.constant 1 : index
-  %iters = arith.constant 4 : index
+  %iters = arith.constant 6 : index
 
   // ==========================================
   // Correctness check: compute one result (unused beyond dealloc — kept to
@@ -135,9 +135,9 @@ func.func @main() {
   bufferization.dealloc_tensor %ref_result : tensor<?x?xf64, #CSR>
 
   // ==========================================
-  // Benchmark SpGEMM: run 4 iterations, collect times, write to file
+  // Benchmark SpGEMM: run 6 iterations, collect times, write to file
   // ==========================================
-  %times = memref.alloc() : memref<4xf64>
+  %times = memref.alloc() : memref<6xf64>
 
   scf.for %iter = %c0 to %iters step %c1 {
     %start_iter = func.call @rtclock() : () -> f64
@@ -147,7 +147,7 @@ func.func @main() {
     %elapsed_iter = arith.subf %end_iter, %start_iter : f64
     func.call @printF64(%elapsed_iter) : (f64) -> ()
     func.call @printNewline() : () -> ()
-    memref.store %elapsed_iter, %times[%iter] : memref<4xf64>
+    memref.store %elapsed_iter, %times[%iter] : memref<6xf64>
     bufferization.dealloc_tensor %res : tensor<?x?xf64, #CSR>
   }
 
@@ -158,13 +158,13 @@ func.func @main() {
   %format = llvm.mlir.addressof @fmt_time : !llvm.ptr
 
   scf.for %iter = %c0 to %iters step %c1 {
-    %time_val = memref.load %times[%iter] : memref<4xf64>
+    %time_val = memref.load %times[%iter] : memref<6xf64>
     %dummy = llvm.call @fprintf(%fp, %format, %time_val) {var_callee_type = !llvm.func<i32 (ptr, ptr, ...)>} : (!llvm.ptr, !llvm.ptr, f64) -> i32
   }
 
   %dummy_close = llvm.call @fclose(%fp) : (!llvm.ptr) -> i32
 
-  memref.dealloc %times : memref<4xf64>
+  memref.dealloc %times : memref<6xf64>
 
   bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSR>
   bufferization.dealloc_tensor %C : tensor<?x?xf64, #CSC>

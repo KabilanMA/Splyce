@@ -1,50 +1,53 @@
 #!/usr/bin/env python3
-# run_suitesparse_benchmark.py — Real-world SpMSpV benchmark sweep.
+# run_suitesparse_benchmark.py — Real-world SpMSpV benchmark, single curated
+# matrix.
 #
-# For every SuiteSparse matrix selected by
-# suitesparse/download_data.py's median_square_matrix_per_group()
-# sampling (one representative square matrix per group, 169 total), this:
+# Runs one fixed job (instead of sweeping the full 169 median-per-group
+# SuiteSparse sample — see suitesparse/download_data.py for that sweep):
 #
-#   1. Downloads it (suitesparse/download_data.py's download_and_extract).
+#   stokes (VLSI group): 11449533 x 11449533 square, nnz=349321980
+#   (~0.0000266% dense) — used for tensor_B.
+#
+# For this job, this script:
+#   1. Downloads it (suitesparse/download_data.py's download_and_extract,
+#      looked up via matrix_metadata.json — run suitesparse/scrape_metadata.py
+#      first if that file doesn't exist yet).
 #   2. Converts it to .tns (suitesparse/convert_to_tns.py's process_dir —
 #      mirrors symmetric entries, drops explicit zeros) and copies it into
 #      this directory as tensor_B.tns.
-#   3. Generates a synthetic sparse vector tensor_x.tns whose length
-#      matches B's column count. SuiteSparse doesn't ship a matching
-#      sparse vector for arbitrary matrices, so its nnz count is chosen
-#      from the matrix's own sparsity:
-#        sparsity = nnz / (rows * cols)              [matrix's own]
-#        target   = max(sparsity, 0.00001)            [floor: 0.001%]
-#        vector_nnz = round(target * dim)
-#      i.e. the vector is at least as dense as the matrix it's paired
-#      with, with a 0.001% floor so near-empty matrices still get a
-#      handful of nonzeros to actually exercise co-iteration.
+#   3. Generates a synthetic sparse vector tensor_x.tns whose length matches
+#      B's column count, at a fixed 0.001% nonzero density (i.e.
+#      vector_nnz = round(0.00001 * dim) — for stokes, dim=11449533 so
+#      vector_nnz = 114), via generate_sparse_vector_tns below. Unlike the
+#      old 169-dataset sweep (which floored the vector's density at the
+#      matrix's own density so near-empty matrices still got a handful of
+#      nonzeros), this always uses the fixed 0.001% target regardless of
+#      stokes's own (much sparser) density.
 #   4. Runs test_benchmark_spmspv_splyce_phase_001 FIRST, then
 #      test_benchmark_spmspv_scf — but only if Splyce didn't time out. If
 #      Splyce already hit the timeout, the (unvectorized, typically no
 #      faster) baseline is skipped entirely rather than wasting the same
 #      timeout on a run that's essentially guaranteed to also be too slow.
-#      Each binary loops 4 iterations internally per spmspv.mlir's @main,
+#      Each binary loops 6 iterations internally per spmspv.mlir's @main,
 #      writing a "benchmark" file with one time per line.
 #   5. Appends one summary row (dataset, group, matrix nnz/dim, vector
-#      nnz/density, scf_median, splyce_median — median of the 3
+#      nnz/density, scf_median, splyce_median — median of the 5
 #      non-cold-start iterations; scf_median is "SKIPPED" when Splyce
 #      timed out) to spmspv_realworld_results.csv, and every individual
 #      raw iteration time to spmspv_realworld_raw_runtimes.csv as a
 #      backup.
 #   6. Deletes tensor_B.tns/tensor_x.tns and the downloaded/converted
-#      suitesparse/<name>/ directory before moving to the next dataset.
+#      suitesparse/stokes/ directory afterward.
 #
-# Both CSVs are appended to, not overwritten, so the sweep can be
-# interrupted and resumed (already-recorded datasets aren't re-run).
+# Both CSVs are appended to, not overwritten, so a re-run is a no-op once
+# stokes is already recorded (unless the CSV row is removed first).
 #
 # Prerequisite: ./compile.sh has already been run, so
 # test_benchmark_spmspv_scf and test_benchmark_spmspv_splyce_phase_001
 # exist in this directory.
 #
 # Usage:
-#   ./run_suitesparse_benchmark.py             # full 169-dataset sweep
-#   ./run_suitesparse_benchmark.py --limit 5    # only the first 5 (testing)
+#   ./run_suitesparse_benchmark.py
 #   ./run_suitesparse_benchmark.py --timeout 600  # per-binary-run timeout
 #                                                  # in seconds (default 300)
 
@@ -73,7 +76,12 @@ TENSOR_B = os.path.join(SCRIPT_DIR, "tensor_B.tns")
 TENSOR_X = os.path.join(SCRIPT_DIR, "tensor_x.tns")
 BENCHMARK_FILE = os.path.join(SCRIPT_DIR, "benchmark")
 
-MIN_VECTOR_SPARSITY = 0.00001  # 0.001%, expressed as nnz / total possible entries
+# Fixed target density for the synthetic vector x, per this job's request
+# (0.001%), rather than floored against the matrix's own density.
+VECTOR_DENSITY = 0.00001  # 0.001%, expressed as nnz / dim
+
+# The single curated job this script runs.
+MATRIX_NAME = "stokes"
 
 
 def generate_sparse_vector_tns(path, dim, nnz):
@@ -126,10 +134,7 @@ def already_recorded():
 
 def main():
     args = sys.argv[1:]
-    limit = None
     timeout = 300
-    if "--limit" in args:
-        limit = int(args[args.index("--limit") + 1])
     if "--timeout" in args:
         timeout = int(args[args.index("--timeout") + 1])
 
@@ -137,12 +142,15 @@ def main():
         sys.exit("error: binaries not found — run ./compile.sh first")
 
     metadata = dl.load_metadata()
-    selected = dl.median_square_matrix_per_group(metadata)
-    if limit is not None:
-        selected = selected[:limit]
+    entry = metadata.get(MATRIX_NAME)
+    if entry is None:
+        sys.exit(f"error: {MATRIX_NAME} not found in matrix_metadata.json")
+    name, group = entry["name"], entry["group"]
 
     done = already_recorded()
-    print(f"{len(selected)} datasets selected, {len(done)} already recorded — resuming")
+    if name in done:
+        print(f"{name} already recorded — nothing to do")
+        return
 
     write_summary_header = not os.path.isfile(SUMMARY_CSV)
     write_raw_header = not os.path.isfile(RAW_BACKUP_CSV)
@@ -158,73 +166,63 @@ def main():
         if write_raw_header:
             raw_writer.writerow(["dataset", "config", "iteration", "time_s"])
 
-        for entry in selected:
-            name = entry["name"]
-            group = entry["group"]
+        print(f"=== {group}/{name} (nnz={entry['nnz']}) ===")
+        dataset_dir = os.path.join(SUITESPARSE_DIR, name)
 
-            if name in done:
-                continue
+        try:
+            dl.download_and_extract(name, group, force=False)
+            if not os.path.isdir(dataset_dir):
+                sys.exit(f"  [skip] {name}: download/extract failed")
 
-            print(f"=== {group}/{name} (nnz={entry['nnz']}) ===")
-            dataset_dir = os.path.join(SUITESPARSE_DIR, name)
+            cvt.process_dir(dataset_dir)
+            tns_path = os.path.join(dataset_dir, f"{name}.tns")
+            if not os.path.isfile(tns_path):
+                sys.exit(f"  [skip] {name}: conversion failed, no .tns produced")
 
-            try:
-                dl.download_and_extract(name, group, force=False)
-                if not os.path.isdir(dataset_dir):
-                    print(f"  [skip] {name}: download/extract failed")
-                    continue
+            dim = entry["num_rows"]  # square: num_rows == num_cols
+            matrix_nnz = entry["nnz"]
+            matrix_sparsity = matrix_nnz / (dim * dim)
+            target_vector_nnz = round(VECTOR_DENSITY * dim)
 
-                cvt.process_dir(dataset_dir)
-                tns_path = os.path.join(dataset_dir, f"{name}.tns")
-                if not os.path.isfile(tns_path):
-                    print(f"  [skip] {name}: conversion failed, no .tns produced")
-                    continue
+            shutil.copyfile(tns_path, TENSOR_B)
+            vector_nnz = generate_sparse_vector_tns(TENSOR_X, dim, target_vector_nnz)
+            vector_sparsity = vector_nnz / dim
+            print(f"  [vector] dim={dim} nnz={vector_nnz} sparsity={vector_sparsity:.6g} "
+                  f"(matrix_sparsity={matrix_sparsity:.6g})")
 
-                dim = entry["num_rows"]  # square: num_rows == num_cols
-                matrix_nnz = entry["nnz"]
-                matrix_sparsity = matrix_nnz / (dim * dim)
-                target_sparsity = max(matrix_sparsity, MIN_VECTOR_SPARSITY)
-                target_vector_nnz = round(target_sparsity * dim)
+            print("  [run] splyce phase_001 ...")
+            splyce_times, splyce_timed_out = run_binary(SPLYCE_BIN, timeout)
 
-                shutil.copyfile(tns_path, TENSOR_B)
-                vector_nnz = generate_sparse_vector_tns(TENSOR_X, dim, target_vector_nnz)
-                vector_sparsity = vector_nnz / dim
-                print(f"  [vector] dim={dim} nnz={vector_nnz} sparsity={vector_sparsity:.6g} "
-                      f"(matrix_sparsity={matrix_sparsity:.6g})")
+            if splyce_timed_out:
+                print("  [skip] splyce timed out — skipping baseline run")
+                scf_times, scf_med = None, "SKIPPED"
+            else:
+                print("  [run] baseline (scf) ...")
+                scf_times, _ = run_binary(BASELINE_BIN, timeout * 5)
+                scf_med = median_excl_first(scf_times) if scf_times else "NA"
 
-                print("  [run] splyce phase_001 ...")
-                splyce_times, splyce_timed_out = run_binary(SPLYCE_BIN, timeout)
+            for i, t in enumerate(splyce_times or []):
+                raw_writer.writerow([name, "splyce_phase_001", i, t])
+            for i, t in enumerate(scf_times or []):
+                raw_writer.writerow([name, "scf", i, t])
+            rf.flush()
 
-                if splyce_timed_out:
-                    print("  [skip] splyce timed out — skipping baseline run")
-                    scf_times, scf_med = None, "SKIPPED"
-                else:
-                    print("  [run] baseline (scf) ...")
-                    scf_times, _ = run_binary(BASELINE_BIN, timeout*5)
-                    scf_med = median_excl_first(scf_times) if scf_times else "NA"
+            splyce_med = median_excl_first(splyce_times) if splyce_times else "NA"
 
-                for i, t in enumerate(splyce_times or []):
-                    raw_writer.writerow([name, "splyce_phase_001", i, t])
-                for i, t in enumerate(scf_times or []):
-                    raw_writer.writerow([name, "scf", i, t])
-                rf.flush()
+            if splyce_med != "NA":
+                summary_writer.writerow([
+                    name, group, dim, matrix_nnz, matrix_sparsity,
+                    vector_nnz, vector_sparsity, scf_med, splyce_med,
+                ])
+            sf.flush()
+            print(f"  scf_median={scf_med}  splyce_median={splyce_med}")
 
-                splyce_med = median_excl_first(splyce_times) if splyce_times else "NA"
-
-                if splyce_med != "NA":
-                    summary_writer.writerow([
-                        name, group, dim, matrix_nnz, matrix_sparsity,
-                        vector_nnz, vector_sparsity, scf_med, splyce_med,
-                    ])
-                sf.flush()
-                print(f"  scf_median={scf_med}  splyce_median={splyce_med}")
-
-            finally:
-                for f in (TENSOR_B, TENSOR_X):
-                    if os.path.isfile(f):
-                        os.remove(f)
-                if os.path.isdir(dataset_dir):
-                    shutil.rmtree(dataset_dir)
+        finally:
+            for f in (TENSOR_B, TENSOR_X):
+                if os.path.isfile(f):
+                    os.remove(f)
+            if os.path.isdir(dataset_dir):
+                shutil.rmtree(dataset_dir)
 
     print(f"Done. Summary: {SUMMARY_CSV}")
     print(f"Raw backup: {RAW_BACKUP_CSV}")

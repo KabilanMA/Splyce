@@ -1,15 +1,8 @@
-// BufferizationPrepPass.cpp
-//
-// Prepares IR for one-shot-bufferize by stamping the restrict attribute on
-// every bufferization.to_tensor op that lacks it.
-//
-// The sparse-tensor-conversion pipeline emits to_tensor without restrict.
-// One-shot-bufferize requires restrict to establish buffer-ownership semantics
-// and perform in-place bufferization of function return tensors.
-//
-// Toggle point: comment out the markToTensorRestrict() call in runOnOperation()
-// to turn the entire transformation into a no-op while keeping the pass in the
-// pipeline (useful for comparing generated IR with and without restrict).
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+// BufferizationPrepPass.cpp - stamps `restrict` onto every
+// bufferization.to_tensor op that lacks it, ahead of one-shot-bufferize.
+// See BufferizationPrepPass.h / Passes.td for why.
 
 #include "Transforms/BufferizationPrepPass.h"
 

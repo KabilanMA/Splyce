@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // tools/splyce-translate.cpp
 
 // A minimal mlir-translate clone that registers only the translation this

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // Passes.td - TableGen declarations for the co-iteration vectorization pass.
 //
 // Generates:
@@ -16,9 +18,7 @@ def CoIterVectorize : Pass<"splyce"> {
   let description = [{
     Detects the N-way co-iteration pattern emitted by sparse tensor lowering
     (two sorted-list pointer advances with a branch on coordinate equality)
-    and rewrites it into a SIMD fast-lane loop followed by a scalar epilogue.
-
-    The pattern matched is:
+    and rewrites it into a SIMD fast-lane loop followed by a scalar epilogue:
 
       scf.while (%i, %j, %acc) : (index, index, f64) {
         %ca = cmpi ult, %i, end_a
@@ -34,18 +34,14 @@ def CoIterVectorize : Pass<"splyce"> {
         scf.yield %new_i, %new_j, %new_acc
       }
 
-    It is replaced by:
-
-      (1) A SIMD fast-lane scf.while that runs while BOTH streams have >= W
-          elements remaining (unmasked loads are always safe).  Each iteration:
-          - Loads W coordinates and W values per stream (vector.load).
-          - Performs a W×W cross-compare: for each driver lane k, broadcasts
-            a_coord[k] and compares against all W probe coords.
-          - Accumulates per-lane contributions into the loop-carried accumulator.
-          - Advances pointers via a branchless frontier (min of last coords).
-
-      (2) The original scalar loop as a scalar epilogue, picking up from the
-          pointer positions and accumulator value left by the fast lane.
+    The fast lane runs as long as both streams still have at least W
+    elements left, so its loads never need masking: each iteration loads W
+    coordinates and values per stream, does a W×W cross-compare to find
+    matches, folds the matched contributions into the loop-carried
+    accumulator, and advances every stream's pointer past the smallest
+    coordinate seen (a branchless frontier). Once a stream runs low, the
+    original scalar while loop takes over as an epilogue, picking up right
+    where the fast lane's pointers and accumulator left off.
 
     Options:
       vector-width    : SIMD width W (default 8; use 16 for AVX-512).

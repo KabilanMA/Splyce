@@ -27,6 +27,12 @@
 # count is skipped with a warning instead of failing the whole sweep —
 # this script is meant to run unmodified on machines of different sizes.
 #
+# Once every run is done and results.csv is fully written, this also
+# prints the results table (print_results.py) and regenerates
+# speedup_plot.png (plot_results.py — which also prints the per-core-count
+# speedup numbers the plot is drawn from, since the image itself isn't
+# visible from a terminal).
+#
 # Usage:
 #   ./run.sh [--clean] [results_csv]
 #     --clean       Delete the compile.sh-generated binaries afterward.
@@ -151,6 +157,14 @@ echo "=== Splyce (vectorized), scaling across cores ==="
 for cores in "${CORE_COUNTS[@]}"; do
   run_one "$SPLYCE_BIN" "splyce_phase_001_parallel" "$cores"
 done
+
+echo ""
+echo "Results (${RESULTS_CSV}):"
+python3 ./print_results.py "$RESULTS_CSV"
+
+echo ""
+echo "Generating plot ..."
+./plot_results.py --csv "$RESULTS_CSV"
 
 if [[ $CLEAN -eq 1 ]]; then
   echo "Cleaning up compiled binaries ..."

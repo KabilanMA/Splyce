@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // FastMathPrepPass.cpp
 //
 // Stamps `reassoc | contract` fastmath flags onto every op implementing

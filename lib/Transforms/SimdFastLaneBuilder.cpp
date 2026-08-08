@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // SimdFastLaneBuilder.cpp
 //
 // Implements the W-wide SIMD fast-lane loop for the co-iteration pattern.
@@ -99,7 +101,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
                 llvm::SmallVector<Attribute>(
                     W, ib.getFloatAttr(desc.elementType, 0.0))));
 
-        // Unmasked vector loads — safe because condition guarantees >= W elements.
+        // Unmasked vector loads - safe because condition guarantees >= W elements.
         for (unsigned s = 0; s < N; ++s) {
             allCoords[s] = ib.create<vector::LoadOp>(
                 vecIdx(), desc.streams[s].coordsMemref, ValueRange{ptrs[s]});
@@ -184,13 +186,13 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
     }
 
     // desc.extraScalarFactor: a third contraction operand that doesn't vary
-    // with this co-iteration (e.g. SpMTTKRP's B[i,k,l], SpMMH's C[k,j]) —
+    // with this co-iteration (e.g. SpMTTKRP's B[i,k,l], SpMMH's C[k,j]) -
     // folded into every lane's contribution alongside aVals[k]*bMatchVals[k].
     //
     // desc.isScatterPattern: the co-iterated dimension is a parallel/output
     // index rather than a reduction index (e.g. SpMMH, merging on row i),
     // so each lane's match writes to its own driver-stream coordinate
-    // instead of folding into one loop-carried sum — different lanes may
+    // instead of folding into one loop-carried sum - different lanes may
     // target different output addresses, so this can't be a single
     // cross-lane reduction the way the accumulator case is.
     Value newAcc;
@@ -216,7 +218,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
             }
         }
         // Scatter-accumulate: coordScalars[0][k] (the driver stream's own
-        // coordinate) is always the right address, matched or not — an
+        // coordinate) is always the right address, matched or not - an
         // unmatched lane has bMatchVals[k]==0, so its contribution is a
         // harmless no-op add.
         for (unsigned k = 0; k < W; ++k) {
@@ -303,7 +305,7 @@ void SimdFastLaneBuilder::emitBody(Location loc, ValueRange args,
     }
 
     // Yield: patch stream pointers (and the accumulator, if this kernel has
-    // one — scatter-pattern kernels wrote directly to memory above instead,
+    // one - scatter-pattern kernels wrote directly to memory above instead,
     // and their while loop has no accumulator iter-arg to patch).
     llvm::SmallVector<Value> yieldVals(args.begin(), args.end());
     for (unsigned s = 0; s < N; ++s)

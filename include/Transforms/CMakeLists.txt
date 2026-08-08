@@ -3,13 +3,13 @@
 # Owns the TableGen invocation that generates Passes.h.inc from Passes.td.
 #
 # Why this lives in include/ rather than lib/:
-#   - Passes.h.inc is a *header* consumed by both lib/ and any downstream
+#   - Passes.h.inc is a header consumed by both lib/ and any downstream
 #     project that wants to programmatically create the pass.
 #   - Placing the tablegen target here keeps the generated file next to
 #     its source (.td) and its consumers (.h), making the dependency
 #     graph obvious without cross-directory path arithmetic.
 #   - lib/Transforms/CMakeLists.txt simply lists CoIterVectorizePassIncGen
-#     in DEPENDS — it does not need to know where the .inc was generated.
+#     in DEPENDS - it does not need to know where the .inc was generated.
 
 set(LLVM_TARGET_DEFINITIONS Passes.td)
 

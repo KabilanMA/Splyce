@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // CoIterVectorizePass.cpp
 //
 // Pass entry point: wires CoIterPattern (recognition) and SimdFastLaneBuilder
@@ -5,12 +7,12 @@
 //
 // Flow:
 //   CoIterVectorizePass::runOnOperation()
-//     └─ applyPatternsGreedily(func, patterns)
-//           └─ CoIterVectorizePattern::matchAndRewrite(whileOp, rewriter)
-//                 ├─ tryMatchCoIter(whileOp)          // recognize
-//                 ├─ SimdFastLaneBuilder::build(loc)  // SIMD fast-lane loop
-//                 ├─ rewriter.clone(*whileOp)         // scalar epilogue
-//                 └─ rewriter.replaceOp(whileOp, ...)
+//     |-- applyPatternsGreedily(func, patterns)
+//           |-- CoIterVectorizePattern::matchAndRewrite(whileOp, rewriter)
+//                 |-- tryMatchCoIter(whileOp)          // recognize
+//                 |-- SimdFastLaneBuilder::build(loc)  // SIMD fast-lane loop
+//                 |-- rewriter.clone(*whileOp)         // scalar epilogue
+//                 |-- rewriter.replaceOp(whileOp, ...)
 
 #include "Transforms/CoIterVectorizePass.h"
 #include "Transforms/CoIterPattern.h"
@@ -39,8 +41,8 @@ using namespace mlir::splyce;
 // rewrite pattern
 
 // Matches an scf.while as a co-iteration loop and rewrites it into:
-//   (1) A SIMD fast-lane scf.while (W-wide, unmasked, branchless).
-//   (2) The original scf.while as a scalar epilogue (handles remainder 0..W-1).
+//   - A SIMD fast-lane scf.while (W-wide, unmasked, branchless).
+//   - The original scf.while as a scalar epilogue (handles remainder 0..W-1).
 //
 // The scalar epilogue's init values are the SIMD loop's results, so the
 // accumulated value and pointer positions chain correctly.
@@ -80,11 +82,11 @@ struct CoIterVectorizePattern : public OpRewritePattern<scf::WhileOp> {
 
         rewriter.setInsertionPoint(whileOp);
 
-        // (1) SIMD fast-lane
+        // SIMD fast-lane
         SimdFastLaneBuilder simdBuilder(desc, vectorWidth, rewriter, cfg);
         scf::WhileOp simdWhile = simdBuilder.build(loc);
 
-        // (2) Scalar epilogue
+        // Scalar epilogue
         // Clone the original while verbatim, then patch its init operands to
         // start from where the SIMD loop stopped.  The attribute prevents the
         // greedy driver from re-applying this transformation to the clone.

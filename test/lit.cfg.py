@@ -1,4 +1,6 @@
-# lit.cfg.py.in  —  configured by CMake into the build directory as lit.cfg.py
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+# lit.cfg.py.in  -  configured by CMake into the build directory as lit.cfg.py
 #
 # Teaches lit where our tool and FileCheck live, and which file extension
 # identifies runnable tests.

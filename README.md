@@ -658,7 +658,7 @@ Contributions are welcome! Please:
 
 ## License
 
-[Specify your license here - e.g., Apache 2.0, MIT, etc.]
+Splyce is licensed under the Apache License 2.0 with LLVM Exceptions, matching the license of the MLIR/LLVM infrastructure it builds on. See [LICENSE](LICENSE) for the full text.
 
 ---
 

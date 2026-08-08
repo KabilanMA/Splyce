@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 // CoIterPattern.cpp - Recognition logic for the N-way co-iteration idiom.
 
 #include "Transforms/CoIterPattern.h"
@@ -57,7 +59,7 @@ static bool isDerivedFrom(Value v, BlockArgument target) {
 
 // condition block
 
-// Extract N StreamDescriptors — one per `cmpi ult` leaf in the AND-tree.
+// Extract N StreamDescriptors - one per `cmpi ult` leaf in the AND-tree.
 // Fills iterVar, end, and argIndex; coordsMemref / valsMemref / loadedCoord
 // are filled later by matchDoBlock.
 static bool matchConditionBlock(Block &condBlock, CoIterDescriptor &desc) {
@@ -109,7 +111,7 @@ static void collectMulfLeaves(Value v, llvm::SmallVectorImpl<Value> &out) {
 }
 
 // Classifies each leaf of `term`'s multiply chain as one of the N stream
-// value loads, or (at most one) extra loop-invariant scalar factor —
+// value loads, or (at most one) extra loop-invariant scalar factor -
 // e.g. a third contraction operand that doesn't vary with this
 // co-iteration (SpMTTKRP's B[i,k,l], SpMMH's C[k,j]). Fails if a stream
 // value is missing/duplicated, or more than one leaf is unclassified.
@@ -147,10 +149,10 @@ static bool matchMultiplyChain(Value term, CoIterDescriptor &desc) {
 
 // Scatter pattern: scf.if has no results, but its then-block does a
 // load/accumulate/store round-trip directly into an output memref,
-// indexed by [matchedCoord, freeIndex] — the shape produced when the
+// indexed by [matchedCoord, freeIndex] - the shape produced when the
 // co-iterated dimension is a parallel/output index rather than a
 // reduction index (e.g. SpMMH, where B and D merge over the shared
-// *parallel* row index i, so each match writes straight to A[i, j]
+// parallel row index i, so each match writes straight to A[i, j]
 // instead of folding into a single loop-carried sum).
 static bool matchScatterPattern(scf::IfOp ifOp, Value matchedCoord,
                                  CoIterDescriptor &desc) {
@@ -209,7 +211,7 @@ static bool matchScatterPattern(scf::IfOp ifOp, Value matchedCoord,
 static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
     const unsigned N = desc.numStreams();
 
-    // (3) Find N index-typed coordinate loads, one per stream
+    // Find N index-typed coordinate loads, one per stream.
     llvm::SmallVector<memref::LoadOp, 4> coordLoads(N);
     unsigned matched = 0;
     for (auto &op : doBlock) {
@@ -236,9 +238,9 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // (4) Find the global minimum over all N loaded coordinates
-    // Accept chains of arith.minui or arith.select that reference all N coords.
-    // Stop at the first scf.if to avoid confusing pointer-advance selects.
+    // Find the global minimum over all N loaded coordinates: accept chains
+    // of arith.minui or arith.select that reference all N coords. Stop at
+    // the first scf.if to avoid confusing pointer-advance selects.
     Value globalMin;
     llvm::SmallPtrSet<Value, 8> coordSet;
     for (auto &sd : desc.streams)
@@ -267,7 +269,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // (5) Find the scf.if whose condition is AND of N "cmpi eq, coord, min" 
+    // Find the scf.if whose condition is the AND of N "coord == min" checks.
     scf::IfOp matchIf;
     for (auto &op : doBlock) {
         auto ifOp = dyn_cast<scf::IfOp>(&op);
@@ -292,8 +294,8 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         return false;
     }
 
-    // (6) Find value loads in the scf.if true-block 
-    // Each stream contributes one float-typed load indexed by its do-block arg.
+    // Find the value loads in the scf.if's true-block: each stream
+    // contributes one float-typed load indexed by its do-block arg.
     Block &ifBody = matchIf.getThenRegion().front();
     for (auto &op : ifBody) {
         auto load = dyn_cast<memref::LoadOp>(&op);
@@ -318,8 +320,8 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
         }
     }
 
-    // (6 cont.) Detect loop-carried accumulator, or fall back to the
-    // scatter pattern when the scf.if yields nothing.
+    // Detect the loop-carried accumulator, or fall back to the scatter
+    // pattern when the scf.if yields nothing.
     auto yieldOp = cast<scf::YieldOp>(doBlock.getTerminator());
     if (matchIf.getNumResults() == 0) {
         if (!matchScatterPattern(matchIf, globalMin, desc)) {
@@ -368,7 +370,7 @@ static bool matchDoBlock(Block &doBlock, CoIterDescriptor &desc) {
                                 << desc.accArgIndex << "\n");
     }
 
-    // (7) Verify the scf.yield advances each stream iter var
+    // Verify the scf.yield advances each stream's iter var.
     if (yieldOp.getResults().size() < N) {
         LLVM_DEBUG(llvm::dbgs() << "[Splyce] yield has fewer results than streams\n");
         return false;

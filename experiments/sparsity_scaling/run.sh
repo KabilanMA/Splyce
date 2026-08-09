@@ -5,7 +5,7 @@
 #
 # For each density in SPARSITY_LEVELS (percent of nonzero entries: 0.01,
 # 0.1, 1, 2, 5, 10), this regenerates tensor_B.tns/tensor_C.tns at that
-# density (gen_data.py sparsity_scaling <pct> — same 5000x5000 shape as
+# density (gen_data.sh sparsity_scaling <pct> — same 5000x5000 shape as
 # speedups/synthetic_data/spgemm, just with density swept instead of held
 # fixed at 5%) and re-runs both binaries against it, since the compiled
 # binaries don't embed any data themselves — only the sparsification
@@ -112,7 +112,7 @@ run_one() {
 for sparsity_pct in "${SPARSITY_LEVELS[@]}"; do
   echo "=== Sparsity ${sparsity_pct}% (nonzero density) ==="
   echo "  -> regenerating data at ${sparsity_pct}% density ..."
-  ( cd "$EXPERIMENTS_DIR" && python3 ./gen_data.py sparsity_scaling "$sparsity_pct" )
+  ( cd "$EXPERIMENTS_DIR" && ./gen_data.sh sparsity_scaling "$sparsity_pct" )
 
   run_one "$BASELINE_BIN" "scf" "$sparsity_pct"
   run_one "$SPLYCE_BIN" "splyce_phase_001" "$sparsity_pct"

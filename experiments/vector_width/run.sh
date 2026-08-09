@@ -5,7 +5,7 @@
 #
 # For each density in SPARSITY_LEVELS (percent of nonzero entries: 1, 5,
 # 10), this regenerates tensor_B.tns/tensor_C.tns at that density
-# (gen_data.py vector_width <pct> — same 5000x5000 shape as
+# (gen_data.sh vector_width <pct> — same 5000x5000 shape as
 # sparsity_scaling) and re-runs all 5 binaries against it, since the
 # compiled binaries don't embed any data themselves — only the
 # sparsification/vectorization strategy — so runtime must be re-measured
@@ -118,7 +118,7 @@ run_one() {
 for sparsity_pct in "${SPARSITY_LEVELS[@]}"; do
   echo "=== Sparsity ${sparsity_pct}% (nonzero density) ==="
   echo "  -> regenerating data at ${sparsity_pct}% density ..."
-  ( cd "$EXPERIMENTS_DIR" && python3 ./gen_data.py vector_width "$sparsity_pct" )
+  ( cd "$EXPERIMENTS_DIR" && ./gen_data.sh vector_width "$sparsity_pct" )
 
   run_one "$BASELINE_BIN" "scf" "$sparsity_pct"
   for vw in "${VECTOR_WIDTHS[@]}"; do

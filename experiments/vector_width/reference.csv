@@ -1,0 +1,16 @@
+kernel,configuration,sparsity_pct,exec_time_s
+spgemm,scf,1,11.714429
+spgemm,splyce_vw_2,1,6.600073
+spgemm,splyce_vw_4,1,4.926599
+spgemm,splyce_vw_8,1,8.703911
+spgemm,splyce_vw_16,1,14.266050
+spgemm,scf,5,58.721993
+spgemm,splyce_vw_2,5,33.921512
+spgemm,splyce_vw_4,5,21.098410
+spgemm,splyce_vw_8,5,41.022585
+spgemm,splyce_vw_16,5,73.719531
+spgemm,scf,10,121.487090
+spgemm,splyce_vw_2,10,66.255460
+spgemm,splyce_vw_4,10,41.294646
+spgemm,splyce_vw_8,10,81.469722
+spgemm,splyce_vw_16,10,147.502831

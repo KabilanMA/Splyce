@@ -1,0 +1,6 @@
+Kernel Name,Baseline (s),Splyce (s),Speedup (x)
+spgemm,58.755881,21.061041,2.79
+spmmh,61.294217,31.433762,1.95
+spmspv,4.815549,1.697258,2.84
+spmttkrp,24.338648,10.447229,2.33
+spttspm,30.708904,14.389610,2.13

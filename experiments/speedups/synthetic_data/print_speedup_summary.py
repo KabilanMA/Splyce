@@ -10,8 +10,9 @@
 # those two binaries). Speedup is baseline / splyce.
 #
 # Usage:
-#   ./print_speedup_summary.py                  # reads ./<kernel>/results.csv
-#   ./print_speedup_summary.py --out summary.csv # also writes to a file
+#   ./print_speedup_summary.py                  # reads ./<kernel>/results.csv,
+#                                                 # writes ./speedup_summary.csv
+#   ./print_speedup_summary.py --out summary.csv # writes to a custom path instead
 
 import csv
 import os
@@ -38,7 +39,7 @@ def to_float(value):
 
 def main():
     args = sys.argv[1:]
-    out_path = None
+    out_path = os.path.join(SCRIPT_DIR, "speedup_summary.csv")
     if "--out" in args:
         out_path = args[args.index("--out") + 1]
 
@@ -78,10 +79,9 @@ def main():
     writer = csv.writer(sys.stdout)
     writer.writerows(out_rows)
 
-    if out_path:
-        with open(out_path, "w", newline="") as f:
-            csv.writer(f).writerows(out_rows)
-        print(f"Wrote {out_path}", file=sys.stderr)
+    with open(out_path, "w", newline="") as f:
+        csv.writer(f).writerows(out_rows)
+    print(f"Wrote {out_path}", file=sys.stderr)
 
     if missing:
         print("Incomplete data for:", file=sys.stderr)

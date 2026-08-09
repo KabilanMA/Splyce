@@ -1,0 +1,13 @@
+kernel,configuration,sparsity_pct,exec_time_s
+spgemm,scf,0.01,0.233684
+spgemm,splyce_phase_001,0.01,0.228714
+spgemm,scf,0.1,1.367746
+spgemm,splyce_phase_001,0.1,1.125425
+spgemm,scf,1,11.735713
+spgemm,splyce_phase_001,1,4.938738
+spgemm,scf,2,23.130233
+spgemm,splyce_phase_001,2,8.995538
+spgemm,scf,5,58.731756
+spgemm,splyce_phase_001,5,21.065535
+spgemm,scf,10,121.565378
+spgemm,splyce_phase_001,10,41.305631

@@ -7,4 +7,5 @@ __pycache__/
 **/**.tns
 **/**.mtx
 
+playground/
 experiments/gen_data

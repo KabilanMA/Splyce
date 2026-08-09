@@ -1,0 +1,8 @@
+kernel,configuration,cores,exec_time_s
+spmttkrp,scf_parallel,1,24.245875
+spmttkrp,splyce_phase_001_parallel,1,10.464878
+spmttkrp,splyce_phase_001_parallel,2,5.259041
+spmttkrp,splyce_phase_001_parallel,4,2.632649
+spmttkrp,splyce_phase_001_parallel,8,1.317158
+spmttkrp,splyce_phase_001_parallel,16,0.663884
+spmttkrp,splyce_phase_001_parallel,32,0.337837

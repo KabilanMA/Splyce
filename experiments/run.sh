@@ -241,14 +241,14 @@ for experiment in "${EXPERIMENTS[@]}"; do
   echo ""
 done
 
-if [[ "$RUN_MODE" == "table2" ]]; then
+if [[ "$RUN_MODE" == "table2" || "$RUN_MODE" == "all" ]]; then
   echo "========================================"
   echo " Table 2 summary"
   echo "========================================"
   "$SCRIPT_DIR/speedups/synthetic_data/print_speedup_summary.py"
 fi
 
-if [[ "$RUN_MODE" == "realdata" ]]; then
+if [[ "$RUN_MODE" == "realdata" || "$RUN_MODE" == "all" ]]; then
   echo "========================================"
   echo " Real-world data summary"
   echo "========================================"

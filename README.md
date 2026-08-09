@@ -1,10 +1,9 @@
-# Splyce: N-Way Co-Iteration Vectorization for Sparse Tensors
+# Splyce: SIMD Vectorization of Sparse Coiteration
 
-Splyce is an MLIR optimization pass (`--splyce`) that vectorizes N-way co-iteration loops in sparse tensor computations. It replaces scalar `scf.while` epilogues with SIMD fast-lane execution paths, delivering significant speedups for operations like SpGEMM and MTTKRP.
+Splyce is an MLIR optimization pass that vectorizes 2-way co-iteration loops in sparse tensor computations. It replaces scalar `scf.while` epilogues with SIMD fast-lane execution paths, delivering significant speedups for sparse tensor kernels.
 
 ## Table of Contents
 
-- [Quick Start](#quick-start)
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [Building and Installation](#building-and-installation)
@@ -15,26 +14,6 @@ Splyce is an MLIR optimization pass (`--splyce`) that vectorizes N-way co-iterat
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 
----
-
-## Quick Start
-
-```bash
-# 1. Install LLVM/MLIR (commit 6a6d43255059)
-git clone https://github.com/llvm/llvm-project.git
-cd llvm-project && git checkout 6a6d43255059
-
-# 2. Build Splyce
-cd ~/path/to/splyce
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir \
-  -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm
-ninja -C build
-
-# 3. Verify installation
-./build/bin/splyce-opt --help | grep splyce
-```
 
 ---
 
@@ -42,26 +21,30 @@ ninja -C build
 
 ### What is Splyce?
 
-Splyce tackles the vectorization bottleneck in sparse tensor computations. Traditional sparse dialect lowering produces scalar co-iteration loops that:
+Splyce tackles the vectorization bottleneck in sparse tensor computations. Traditional sparse dialect lowering produces scalar coiteration loops that:
 - Check tensor coordinates on each iteration
 - Branch based on coordinate comparisons
 - Cannot be auto-vectorized by conventional compilers
 
-Splyce recognizes these patterns and converts them into vectorized "fast lanes" using SIMD operations with masked execution, achieving **N-way parallelism** on existing CPU architectures.
+Splyce recognizes these patterns and converts them into vectorized "fast lanes" using SIMD operations with masked execution, achieving **2-way parallelism** on existing CPU architectures.
 
 ### Key Features
 
-- **N-Way Co-Iteration Vectorization**: Vectorizes pointer-chasing loops in sparse tensor operations
+- **2-Way Co-Iteration Vectorization**: Vectorizes pointer-chasing loops in sparse tensor operations
 - **SIMD Fast-Lane Generation**: Creates masked SIMD execution paths for coordinate matching
+- **Scalar Epilogue**: Keep the previous scalar coiteration loop as an epilogue.
 - **Configurable Vector Width**: Supports flexible SIMD width selection (4, 8, 16, etc.)
 - **Phase-Based Optimization**: Selective application of vectorization phases
 - **Integration with MLIR Pipeline**: Works seamlessly with existing sparse dialect lowering
 
 ### Target Operations
 
-- **SpGEMM** (Sparse matrix × matrix multiplication)
-- **MTTKRP** (Matricized Tensor Times Khatri-Rao Product)
-- Other N-way co-iteration operations
+- **SpGEMM** 
+- **SpMTTKRP** 
+- **SpMSpV** 
+- **SpMMH** 
+- **SpTTSpM**
+- Other sparse coiteration operations.
 
 ---
 
@@ -69,33 +52,27 @@ Splyce recognizes these patterns and converts them into vectorized "fast lanes" 
 
 ### System Requirements
 
-- **CMake** 3.20+
-- **Ninja** or GNU Make
+- **CMake** 3.28+
+- **Ninja**
 - **Git**
-- **Python** 3.6+
-- **C++ Compiler** (GCC 11+ or Clang 14+)
+- **Python** 3.10+
+- **C++ Compiler** (GCC 13+)
 
 ### Platform-Specific Installation
 
 **Ubuntu / Debian:**
 ```bash
-sudo apt-get install -y cmake ninja-build clang lld python3 python3-pip git zlib1g-dev
-```
-
-**macOS (Homebrew):**
-```bash
-brew install cmake ninja llvm python3
+sudo apt-get install -y cmake ninja-build python3 python3-pip git zlib1g-dev
 ```
 
 **Fedora / RHEL:**
 ```bash
-sudo dnf install -y cmake ninja-build clang lld python3 git zlib-devel
+sudo dnf install -y cmake ninja-build python3 git zlib-devel
 ```
 
 **Without Root Access:**
 ```
 You can proceed with cmake, python3, and git only.
-Build clang/lld from LLVM source to avoid system dependencies.
 ```
 
 ---
@@ -104,54 +81,45 @@ Build clang/lld from LLVM source to avoid system dependencies.
 
 ### Step 1: Setup LLVM & MLIR
 
-This project is tested against **LLVM 23.0.0git** (commit `6a6d43255059`).
+This project is tested against **LLVM 23.0.0git** (commit `6a6d432550598a59605ee062bd0e35c9d452c0c5`).
 
 #### Option A: Build from Source (Recommended)
 
+**Fast (recommended):** `llvm-project`'s full history is large, but GitHub lets you fetch a single commit directly, skipping all of it:
+```bash
+git init llvm-project && cd llvm-project
+git remote add origin https://github.com/llvm/llvm-project.git
+git fetch --depth 1 origin 6a6d432550598a59605ee062bd0e35c9d452c0c5
+git checkout FETCH_HEAD
+```
+
+**Simple (slower):** clones the full history, then checks out the commit:
 ```bash
 git clone https://github.com/llvm/llvm-project.git
 cd llvm-project
-git checkout 6a6d43255059
-
-# Setup Python environment
-python3 -m venv py_venv
-source py_venv/bin/activate
-pip install nanobind
+git checkout 6a6d432550598a59605ee062bd0e35c9d452c0c5
 ```
 
-**With system clang/lld installed:**
+**Build clang/lld from source (no system clang/lld required):**
+
+Because clang itself is being built from source here, it will auto-detect a GCC installation on your system to borrow its C++ standard library/headers for building the runtimes. To pin this to a specific GCC instead of whatever the auto-detection picks, pass its install directory explicitly via `-DRUNTIMES_CMAKE_ARGS` below --- update the path (`/usr/lib/gcc/x86_64-linux-gnu/13`) to match your system's GCC location and version.
+
 ```bash
 mkdir build
 cmake -S llvm -B build -G Ninja \
-  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir;lld" \
+  -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;mlir;lld;openmp" \
   -DLLVM_ENABLE_RUNTIMES="all" \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_TARGETS_TO_BUILD="host;X86" \
-  -DLLVM_INCLUDE_TESTS=ON \
-  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+  -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_USE_LINKER=bfd \
   -DCMAKE_C_COMPILER=gcc \
   -DCMAKE_CXX_COMPILER=g++ \
   -DLLVM_ENABLE_ASSERTIONS=OFF \
   -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+  -DRUNTIMES_CMAKE_ARGS="-DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13;-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"
 ```
 
-**Build clang/lld from source (alternative):**
-```bash
-mkdir build
-cmake -S llvm -B build -G Ninja \
-  -DLLVM_ENABLE_PROJECTS="mlir" \
-  -DLLVM_ENABLE_RUNTIMES="all" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_TARGETS_TO_BUILD="host;X86" \
-  -DLLVM_INCLUDE_TESTS=ON \
-  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
-  -DLLVM_USE_LINKER=lld \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DLLVM_ENABLE_ASSERTIONS=OFF \
-  -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
-```
 
 **Build and install:**
 ```bash
@@ -175,6 +143,8 @@ export PATH=$LLVM_INSTALL/bin:$PATH
 
 ### Step 2: Build Splyce Pass
 
+`$LLVM_INSTALL` here is the same one exported in Step 1 (Option A or B) - it's what points `MLIR_DIR`/`LLVM_DIR` at your built/installed LLVM. Also set `--gcc-install-dir` below to the same GCC install you built LLVM's runtimes against earlier, so Splyce links against matching C++ standard library headers/libs.
+
 ```bash
 cd /path/to/splyce
 cmake -S . -B build -G Ninja \
@@ -182,7 +152,9 @@ cmake -S . -B build -G Ninja \
   -DCMAKE_C_COMPILER=clang \
   -DCMAKE_CXX_COMPILER=clang++ \
   -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir \
-  -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm
+  -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm \
+  -DCMAKE_C_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13" \
+  -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"
 
 ninja -C build
 ```
@@ -218,7 +190,7 @@ need to inspect or modify the IR between passes.
 - `--lower-to-llvm`: Runs the full scf -> LLVM dialect lowering pipeline (the other `mlir-opt` stage below) in one flag.
 - `--parallelization`: Add to either of the above to switch to the OpenMP/parallel pipeline variant instead of the default single-threaded one.
 - `--splyce="..."`: The vectorization pass itself (unchanged either way).
-- `--splyce-fastmath` *(optional)*: Enables FMA fusion and tree-shaped (instead of strictly sequential) reductions. Off by default — see "Optional: Enabling FMA / Associative Math" below.
+
 
 ### Example 1: Single-Threaded SpGEMM
 
@@ -323,6 +295,57 @@ clang -O3 ./playground/spgemm_splyce.ll \
   -Wl,-rpath,"$LLVM_INSTALL/lib" \
   -o ./playground/test_benchmark_spgemm_splyce
 ```
+**1.5 Run Binary**
+
+The binary reads its input tensors from `tensor_B.tns` and `tensor_C.tns` in its working directory. Generate them first:
+```bash
+python3 ./playground/gen_data.py
+```
+This writes `tensor_B.tns` and `tensor_C.tns` into `playground/`, regardless of where you run it from.
+
+Then run the binary from `playground/`, since it looks for those files relative to its own working directory:
+```bash
+cd playground && ./test_benchmark_spgemm_splyce
+```
+
+**1.6 Compare with Baseline**
+
+Baseline binary can be generated from either with `mlir-opt` or using `splyce-opt`.
+
+Using `mlir-opt`:
+```bash
+mlir-opt ./playground/spgemm.mlir \
+  --sparsifier -o ./playground/spgemm_baseline.mlir
+mlir-translate ./playground/spgemm_baseline.mlir --mlir-to-llvmir -o ./playground/spgemm_baseline.ll
+```
+
+Using `splyce-opt` with the `Splyce` pass disabled:
+```bash
+./build/bin/splyce-opt ./playground/spgemm.mlir \
+  --sparsify-to-scf \
+  --splyce-bufferize-restrict \
+  --lower-to-llvm \
+  -o ./playground/spgemm_baseline.mlir
+./build/bin/splyce-translate ./playground/spgemm_baseline.mlir \
+  --mlir-to-llvmir -o ./playground/spgemm_baseline.ll
+```
+
+Generate the binary from Clang:
+```bash
+clang -O3 ./playground/spgemm_baseline.ll \
+  -mavx512f -mavx512vl \
+  -fno-vectorize -fno-slp-vectorize \
+  -L"$LLVM_INSTALL/lib" \
+  -lmlir_c_runner_utils \
+  -lmlir_runner_utils \
+  -Wl,-rpath,"$LLVM_INSTALL/lib" \
+  -o ./playground/test_benchmark_spgemm_baseline
+```
+
+and now run the baseline:
+```bash
+cd playground && ./test_benchmark_spgemm_baseline
+```
 
 ### Example 2: Multi-Threaded SpGEMM (OpenMP)
 
@@ -365,6 +388,7 @@ mlir-opt ./playground/spgemm.mlir \
 ```bash
 ./build/bin/splyce-opt ./playground/spgemm_scf_parallel.mlir \
   --splyce="target-function=spgemm vector-width=4 phase-select=001" \
+  --splyce-bufferize-restrict \
   -o ./playground/spgemm_splyce_parallel.mlir
 ```
 
@@ -416,50 +440,23 @@ clang -O3 ./playground/spgemm_splyce_parallel.ll \
   -o ./playground/test_benchmark_spgemm_splyce_parallel
 ```
 
-> Note: `mlir-translate --mlir-to-llvmir` is a drop-in equivalent for `splyce-translate` in steps 1.4/2.4, if you're already relying on a separate LLVM install being on `$PATH`.
+**2.5 Run Parallel Binary**
 
-### Optional: Enabling FMA / Associative Math (`--splyce-fastmath`)
-
-By default, none of the floating-point ops in this pipeline carry any
-fastmath annotation — not the SIMD fast lane, not Splyce's scalar epilogue,
-and not the plain scalar baseline that MLIR's own sparsifier emits. Under
-strict IEEE-754 semantics this means:
-- `vector.reduction` (the SIMD fast lane's horizontal reduction) must lower
-  as a strictly sequential sum instead of a parallel/tree reduction.
-- `arith.mulf` + `arith.addf` pairs (the multiply-accumulate in the fast
-  lane, the scalar epilogue, and the plain scalar baseline alike) never fuse
-  into a single FMA instruction.
-
-Passing `-Ofast` / `-ffast-math` at the final `clang` step does **not** fix
-this: those flags only take effect when Clang's own C/C++ frontend lowers
-source to IR, and that frontend is skipped entirely when compiling an
-already-lowered `.ll` file, which is what this pipeline hands to `clang`.
-`--splyce-fastmath` is the IR-level equivalent, applied upstream at the MLIR
-stage instead: it walks the IR and stamps `reassoc | contract` onto every op
-implementing `ArithFastMathInterface` (`arith.mulf`, `arith.addf`,
-`vector.reduction`, ...). The index/pointer arithmetic used for sparse
-coordinate walking is untouched, since it doesn't implement the interface.
-
-This flag is **optional** and off by default — none of the commands above
-include it. To enable it, add `--splyce-fastmath` anywhere after `--splyce`
-and before `--lower-to-llvm` (order relative to `--splyce-bufferize-restrict`
-doesn't matter):
-
+This binary reads the same `tensor_B.tns`/`tensor_C.tns` inputs as the single-threaded example. If you already generated them in **1.5 Run Binary**, reuse them as-is; otherwise generate them first:
 ```bash
-./build/bin/splyce-opt ./playground/spgemm.mlir \
-  --sparsify-to-scf \
-  --splyce="target-function=spgemm vector-width=4 phase-select=001" \
-  --splyce-bufferize-restrict \
-  --splyce-fastmath \
-  --lower-to-llvm \
-  -o ./playground/spgemm_llvm.mlir
+python3 ./playground/gen_data.py
 ```
 
-It also works standalone on the plain scalar baseline (no `--splyce` at
-all), fusing that loop's single `arith.mulf`/`arith.addf` pair into one FMA
-too — useful for a fair, apples-to-apples comparison against the vectorized
-path. Add `--splyce-fastmath="target-function=<name>"` to restrict it to one
-function, matching `--splyce`'s own option.
+Set `OMP_NUM_THREADS` to however many threads you want the OpenMP-parallelized loop to use, then run from `playground/`:
+```bash
+cd playground && OMP_NUM_THREADS=4 ./test_benchmark_spgemm_splyce_parallel
+```
+
+> For reliable timing (rather than a quick check), pin the run to real cores on a single NUMA node instead of leaving thread placement to the OS scheduler — e.g. `numactl --physcpubind=0-3 --membind=0 env OMP_NUM_THREADS=4 ./test_benchmark_spgemm_splyce_parallel` (or `taskset -c 0-3` if `numactl` isn't available). See [experiments/multicore/run.sh](experiments/multicore/run.sh) for the full pinning approach used in the benchmark suite.
+
+
+> Note: `mlir-translate --mlir-to-llvmir` is a drop-in equivalent for `splyce-translate` in steps 1.4/2.4, if you're already relying on a separate LLVM install being on `$PATH`.
+
 
 ---
 
@@ -467,93 +464,123 @@ function, matching `--splyce`'s own option.
 
 ### Automated Benchmark Script
 
-The repository includes `benchmark.sh`, which automates the full end-to-end evaluation pipeline in a single command:
+Every experiment lives under the `experiments` directory, and each one has its own `compile.sh`/`run.sh` (or, for the real-world-data kernels, `compile.sh`/`run_suitesparse_benchmark.py`) — but all of them are driven from a single entry point, `experiments/run.sh`.
 
+**Prerequisites** (in addition to [Building and Installation](#building-and-installation)):
+- `LLVM_INSTALL` set, with `mlir-opt`, `mlir-translate`, and `clang` on `$PATH`.
+- `build/bin/splyce-opt` and `build/bin/splyce-translate` already built.
+- Every plotting experiment (anything other than `table2`/`realdata`) needs `matplotlib`. Set up a virtual environment once before running anything:
+  ```bash
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install matplotlib
+  ```
+
+Run every command below from inside the `experiments` directory.
+
+`experiments` has four standalone experiment directories (`phase_ablation`, `vector_width`, `sparsity_scaling`, `multicore`) plus a `speedups/{synthetic_data,real_world_data}/{spgemm,spmmh,spmspv,spmttkrp,spttspm}` tree — 14 named experiments in total, each runnable individually by name. All of them can also run in one shot:
 ```bash
-./benchmark.sh
+./run.sh all
+```
+> `all` runs every experiment above sequentially (including the SuiteSparse downloads for the `_realworld` kernels), so it needs network access and can take a while. `table2` and `realdata` also print/write their combined summary tables once their five kernels finish; `all` prints both.
+
+#### Experiment 1 - Phase Ablation
+
+Phase ablation is the experiment to find which phase configuration gives the better performance on SpGEMM kernel. Also the same experiment helps to find the TMA numbers.
+
+You can simply run this experiment as follows:
+```bash
+./run.sh phase_ablation
 ```
 
-**What it does:**
+This will generate two files:
+1. `phase_ablation/tma_results.csv` - Table 1 - use `phase_ablation/reference.csv` for reference.
+2. `phase_ablation/tma_breakdown_plot.png` - Figure 11 - use `phase_ablation/reference.png` for reference.
 
-1. Sparsifies `playground/spgemm.mlir` to SCF form (and a parallel variant if OpenMP is available)
-2. Applies the Splyce vectorization pass
-3. Lowers through the full MLIR → LLVM dialect → LLVM IR pipeline for each variant
-4. Compiles native binaries with `clang -O3 -mavx512f -mavx512vl`
-5. Runs 25 benchmark iterations for each variant
-6. Prints a performance summary with totals, averages, and speedups
-7. Cleans up all intermediate files, leaving only the result files
 
-**Output files** (written to the workspace root):
-| File | Contents |
-|---|---|
-| `benchmark_scf` | Iteration times for the scalar SCF baseline |
-| `benchmark_splyce` | Iteration times for Splyce (single-thread) |
-| `benchmark_splyce_parallel` | Iteration times for Splyce + OpenMP *(if libomp is available)* |
+#### Experiment 2 - Experiment on Synthetic Data (Table 2)
 
-**Example summary output:**
+This experiment automatically generates the required data and will produce the experimental results shown in Table 2 of the submitted paper for all 5 sparse tensor kernels.
+
+You can simply run this experiment as follows:
+```bash
+./run.sh table2
 ```
-========================================
-  Performance Summary
-========================================
-  SCF baseline                    total=  5.2341 s  avg=  0.2094 s  (n=25)
-  Splyce (single-thread)          total=  1.8763 s  avg=  0.0751 s  (n=25)
-  Splyce (parallel/OpenMP)        total=  0.3012 s  avg=  0.0120 s  (n=25)
+This generates a `results.csv` file inside each kernel's directory under `speedups/synthetic_data`, plus one combined `speedups/synthetic_data/speedup_summary.csv` - use `speedups/synthetic_data/speedup_summary_reference.csv` for reference.
 
-  Splyce vs SCF baseline:          2.79x speedup
-  Splyce parallel vs SCF:         17.38x speedup
-  Splyce parallel vs Splyce:       6.23x speedup
-========================================
+If you want to run just one of the five kernels, you can run it individually instead:
+```bash
+./run.sh spgemm_speedup
+./run.sh spmspv_speedup
+./run.sh spmttkrp_speedup
+./run.sh spmmh_speedup
+./run.sh spttspm_speedup
 ```
 
-**Prerequisites:**
-- `LLVM_INSTALL` environment variable must be set (see [Building and Installation](#building-and-installation))
-- `mlir-opt`, `mlir-translate`, and `clang` must be on `$PATH`
-- For the parallel variant: LLVM must be built with `-DLLVM_ENABLE_RUNTIMES=openmp` so that `libomp.so` is present under `$LLVM_INSTALL/lib`. The script detects its absence and skips the parallel variant automatically.
+Once every kernel's `results.csv` exists, `python3 speedups/synthetic_data/print_speedup_summary.py` will print the combined table to the terminal and (re)write `speedup_summary.csv`.
 
----
+#### Experiment 3 - Vector Width Ablation (Figure 12)
 
-## FAQ
+In different hardware depending on their capabilities the vector width to get the optimal performance can vary. For the hardware environment we test, we found that vector width 4 seems to show the significant speedup compared to other vector width in different sparsity factors.
 
-### Q1: Why not use a BlockSparse encoding?
+You can simply run this experiment as follows:
+```bash
+./run.sh vector_width
+```
 
-BlockSparse encoding has several limitations:
+This will generate two results files:
+1. `vector_width/results.csv` contains all the execution numbers - use `vector_width/reference.csv` for reference.
+2. `vector_width/vector_width_speedup_plot.png` - Figure 12 - use `vector_width/reference.png` for reference.
 
-- **Dimensionality mismatch**: BSR is a 2D format (`d0 floordiv B`, `d1 floordiv B`, `d0 mod B`, `d1 mod B`). There is no block dimension to exploit for generalized N-dimensional sparse tensors.
-- **Intersection problem persists**: The scalar `scf.while` co-iteration bottleneck simply reappears at the block-coordinate level. The same branchy, un-vectorizable pointer-chasing occurs, just at coarser granularity.
-- **Phantom nonzero overhead**: Real-world coordinate distributions are arbitrary. Forcing them into fixed-size blocks introduces phantom zeros that don't exist in the original data, inflating memory and bandwidth costs with no computational benefit.
+#### Experiment 4 - Sparsity Scaling (Figure 13)
 
-### Q2: When is BlockSparse beneficial compared to Splyce vectorization?
+This experiment is to show that Splyce's performance increase with increasing non zero density and even in extreme sparse data, Splyce does not show any significant degradation in performance.
 
-BlockSparse is beneficial when:
-- Data is **naturally block-structured**
-- Nonzeros cluster into `B × B` tiles with >50% density per tile
-- Fill-in overhead is acceptable
-- Dense inner dimensions allow auto-vectorization to exploit SIMD
+You can simply run this experiment as follows:
+```bash
+./run.sh sparsity_scaling
+```
 
-### Q3: When should I use standard sparse dialect instead of Splyce?
+This will generate two results files:
+1. `sparsity_scaling/results.csv` contains all execution numbers - use `sparsity_scaling/reference.csv` for reference.
+2. `sparsity_scaling/sparsity_scaling_plot.png` - Figure 13 - use `sparsity_scaling/reference.png` for reference.
 
-Use standard scalar sparse dialect lowering when:
-- Nonzero density is **extremely low** (<0.1%)
-- SIMD shuffle and mask-matching overhead outweighs the benefit of vectorization
-- Memory bandwidth is not the bottleneck
+#### Experiment 5 - Parallel Scalability (Figure 14)
 
-The Splyce pass is an optimization on top of the sparse dialect; it adds overhead that only pays off when tensor operations have sufficient density and parallelism.
+This experiment is to show the performance speedup Splyce produce for single core is linearly propotional to its parallel core execution. This ensure all the performance improvement are pinned to a single core and use multiple cores gives the same amount of performance as number of cores being used.
 
-### Q4: What SIMD architectures does Splyce support?
+You can simply run this experiment as follows:
+```bash
+./run.sh multicore
+```
 
-Currently tested architectures:
-- **AVX-512** (primary target)
-- **AVX2** (supported, 256-bit vectors)
-- **SSE** (supported, 128-bit vectors)
+This will generate two results files:
+1. `multicore/results.csv` contains all execution numbers - use `multicore/reference.csv` for reference.
+2. `multicore/speedup_plot.png` - Figure 14 - use `multicore/reference.png` for reference.
 
-Splyce generates code compatible with all LLVM-supported SIMD targets via vector width configuration.
+> The parallel variant needs LLVM built with `-DLLVM_ENABLE_RUNTIMES=openmp` so that `libomp.so` is present under `$LLVM_INSTALL/lib`; `multicore/run.sh` detects its absence and skips the parallel variant automatically.
 
-### Q5: How do I choose the vector width?
+#### Experiment 6 - Performance on SuiteSparse Matrices (Table 3)
 
-**Recommended vector widths:**
-- `vector-width=4`: Maximum throughput
+This is to show that Splyce not only gives performance on synthetic data but also on real-world matrices from the SuiteSparse matrix library. Matrices are not included in the repository - the script downloads each one it needs on demand (and, the first time any `_realworld` kernel runs, one-time scrapes `speedups/real_world_data/suitesparse/matrix_metadata.json` for download URLs).
 
-Choose based on your target hardware and data type (i32/i64 vs f32/f64).
+You can simply run this experiment as follows:
+```bash
+./run.sh realdata
+```
+
+This downloads the required matrices, runs them on all five kernels, and produces `speedups/real_world_data/realworld_summary.csv` - compare against `speedups/real_world_data/realworld_summary_reference.csv` for reference.
+
+If you want to run just one of the five kernels, you can run it individually instead:
+```bash
+./run.sh spgemm_realworld
+./run.sh spmspv_realworld
+./run.sh spmttkrp_realworld
+./run.sh spmmh_realworld
+./run.sh spttspm_realworld
+```
+
+Once every kernel's `<kernel>_realworld_results.csv` exists, `python3 speedups/real_world_data/print_realworld_summary.py` will print the combined table to the terminal and (re)write `realworld_summary.csv`.
 
 ---
 
@@ -635,39 +662,7 @@ llvm-objdump -d ./spgemm_splyce.ll | grep vpadd | wc -l
 
 ---
 
-## Future Work
-
-- [ ] Evaluate performance with BlockSparse formats
-- [ ] Support for more complex co-iteration patterns (3+ iterators)
-- [ ] Cost model for automatic vector width selection
-- [ ] Integration with MLIR's vector distribution framework
-- [ ] Support for other backends (GPU, specialized accelerators)
-
----
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Test with existing benchmarks
-4. Submit a pull request with performance results
-
-
----
-
 ## License
 
 Splyce is licensed under the Apache License 2.0 with LLVM Exceptions, matching the license of the MLIR/LLVM infrastructure it builds on. See [LICENSE](LICENSE) for the full text.
-
----
-
-## Support
-
-For issues, questions, or discussions:
-- **GitHub Issues**: [Report bugs or request features](../../issues)
-- **Discussions**: [Join community discussions](../../discussions)
-- **Email**: [kabilanen@gmail.com]
-
-
 

@@ -33,11 +33,10 @@
 // 2. External Utilities
 // ---------------------------------------------------------------------------
 func.func private @rtclock() -> f64
-func.func private @printNewline()
-func.func private @printF64(f64)
 llvm.func external @fopen(!llvm.ptr, !llvm.ptr) -> !llvm.ptr attributes {llvm.emit_c_interface}
 llvm.func external @fprintf(!llvm.ptr, !llvm.ptr, ...) -> i32 attributes {llvm.emit_c_interface}
 llvm.func external @fclose(!llvm.ptr) -> i32 attributes {llvm.emit_c_interface}
+llvm.func external @printf(!llvm.ptr, ...) -> i32 attributes {llvm.emit_c_interface}
 
 // ---------------------------------------------------------------------------
 // 3. File-name Globals (null-terminated)
@@ -47,6 +46,7 @@ llvm.mlir.global internal constant @fileC("tensor_C.tns\00")
 llvm.mlir.global internal constant @benchmarkFile("benchmark\00")
 llvm.mlir.global internal constant @mode_w("w\00")
 llvm.mlir.global internal constant @fmt_time("%f\n\00")
+llvm.mlir.global internal constant @fmt_exec_time("Execution time: %f\n\00")
 
 // ---------------------------------------------------------------------------
 // 4. SpGEMM Kernel
@@ -112,52 +112,27 @@ func.func @main() {
   %B = sparse_tensor.new %file_b : !llvm.ptr to tensor<?x?xf64, #CSR>
   %C = sparse_tensor.new %file_c : !llvm.ptr to tensor<?x?xf64, #CSC>
 
-  %c0    = arith.constant 0 : index
-  %c1    = arith.constant 1 : index
-  %iters = arith.constant 6 : index
-
   // ==========================================
-  // Correctness check: compute one result and print it
+  // Run SpGEMM once, timed
   // ==========================================
-  %ref_result = func.call @spgemm(%B, %C)
+  %start = func.call @rtclock() : () -> f64
+  %res = func.call @spgemm(%B, %C)
     : (tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>) -> tensor<?x?xf64>
+  %end = func.call @rtclock() : () -> f64
+  %elapsed = arith.subf %end, %start : f64
+  bufferization.dealloc_tensor %res : tensor<?x?xf64>
 
-  %c0_idx = arith.constant 0 : index
-  %val    = tensor.extract %ref_result[%c0_idx, %c0_idx] : tensor<?x?xf64>
-  // func.call @printF64(%val) : (f64) -> ()
-  bufferization.dealloc_tensor %ref_result : tensor<?x?xf64>
+  // Print "Execution time: <t>" to the terminal
+  %exec_fmt = llvm.mlir.addressof @fmt_exec_time : !llvm.ptr
+  %dummy_print = llvm.call @printf(%exec_fmt, %elapsed) {var_callee_type = !llvm.func<i32 (ptr, ...)>} : (!llvm.ptr, f64) -> i32
 
-  // ==========================================
-  // Benchmark SpGEMM: run 25 iterations, collect times, write to file
-  // ==========================================
-  %times = memref.alloc() : memref<25xf64>
-
-  scf.for %iter = %c0 to %iters step %c1 {
-    %start_iter = func.call @rtclock() : () -> f64
-    %res = func.call @spgemm(%B, %C)
-      : (tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>) -> tensor<?x?xf64>
-    %end_iter = func.call @rtclock() : () -> f64
-    %elapsed_iter = arith.subf %end_iter, %start_iter : f64
-    func.call @printF64(%elapsed_iter) : (f64) -> ()
-    func.call @printNewline() : () -> ()
-    memref.store %elapsed_iter, %times[%iter] : memref<25xf64>
-    bufferization.dealloc_tensor %res : tensor<?x?xf64>
-  }
-
-  // Write times to file
+  // Save the execution time to file
   %file_ptr = llvm.mlir.addressof @benchmarkFile : !llvm.ptr
   %mode = llvm.mlir.addressof @mode_w : !llvm.ptr
   %fp = llvm.call @fopen(%file_ptr, %mode) : (!llvm.ptr, !llvm.ptr) -> !llvm.ptr
   %format = llvm.mlir.addressof @fmt_time : !llvm.ptr
-
-  scf.for %iter = %c0 to %iters step %c1 {
-    %time_val = memref.load %times[%iter] : memref<25xf64>
-    %dummy = llvm.call @fprintf(%fp, %format, %time_val) {var_callee_type = !llvm.func<i32 (ptr, ptr, ...)>} : (!llvm.ptr, !llvm.ptr, f64) -> i32
-  }
-
+  %dummy_write = llvm.call @fprintf(%fp, %format, %elapsed) {var_callee_type = !llvm.func<i32 (ptr, ptr, ...)>} : (!llvm.ptr, !llvm.ptr, f64) -> i32
   %dummy_close = llvm.call @fclose(%fp) : (!llvm.ptr) -> i32
-
-  memref.dealloc %times : memref<25xf64>
 
   bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSR>
   bufferization.dealloc_tensor %C : tensor<?x?xf64, #CSC>

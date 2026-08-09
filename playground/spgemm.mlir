@@ -1,14 +1,14 @@
-// SpGEMM: C(i,k) = Σ_j A(i,j) · B(j,k)
+// SpGEMM: A(i,k) = Σ_j B(i,j) · C(j,k)
 //
 // Iteration space: (i, k, j)
 //   Parallel:  i, k
 //   Reduction: j  (innermost)
 //
 // Encoding strategy for scf.while innermost loop (inner-product approach):
-//   A in CSR — (i: dense, j: compressed):  for a fixed i, j is sparse-iterated
-//   B in CSC — (k: dense, j: compressed):  for a fixed k, j is sparse-iterated
+//   B in CSR — (i: dense, j: compressed):  for a fixed i, j is sparse-iterated
+//   C in CSC — (k: dense, j: compressed):  for a fixed k, j is sparse-iterated
 //
-//   Both A and B expose j as a compressed level in the reduction loop.
+//   Both B and C expose j as a compressed level in the reduction loop.
 //   The sparsifier must co-iterate (intersect) the two j-lists, which
 //   lowers to an scf.while merge loop at the innermost position.
 
@@ -16,13 +16,13 @@
 // 1. Sparse Encodings
 // ---------------------------------------------------------------------------
 
-// A(i,j) in CSR: outer dimension i is dense, inner dimension j is compressed.
+// B(i,j) in CSR: outer dimension i is dense, inner dimension j is compressed.
 #CSR = #sparse_tensor.encoding<{
   map = (d0, d1) -> (d0 : dense, d1 : compressed)
 }>
 
-// B(j,k) in CSC: stored column-major — outer level is k (dense), inner level
-// is j (compressed).  Logically B is still indexed as (j, k); the permuted
+// C(j,k) in CSC: stored column-major — outer level is k (dense), inner level
+// is j (compressed).  Logically C is still indexed as (j, k); the permuted
 // storage means "for each column k, store the nonzero row indices j."
 // d0 = j (first logical dim), d1 = k (second logical dim).
 #CSC = #sparse_tensor.encoding<{
@@ -42,8 +42,8 @@ llvm.func external @fclose(!llvm.ptr) -> i32 attributes {llvm.emit_c_interface}
 // ---------------------------------------------------------------------------
 // 3. File-name Globals (null-terminated)
 // ---------------------------------------------------------------------------
-llvm.mlir.global internal constant @fileA("tensor_A.tns\00")
 llvm.mlir.global internal constant @fileB("tensor_B.tns\00")
+llvm.mlir.global internal constant @fileC("tensor_C.tns\00")
 llvm.mlir.global internal constant @benchmarkFile("benchmark\00")
 llvm.mlir.global internal constant @mode_w("w\00")
 llvm.mlir.global internal constant @fmt_time("%f\n\00")
@@ -51,52 +51,52 @@ llvm.mlir.global internal constant @fmt_time("%f\n\00")
 // ---------------------------------------------------------------------------
 // 4. SpGEMM Kernel
 //
-//   C(i,k) = Σ_j A(i,j) · B(j,k)
+//   A(i,k) = Σ_j B(i,j) · C(j,k)
 //
 //   Loop order after sparsification:
-//     for i  (parallel, dense — from A's outer level)
-//       for k  (parallel, dense — from B's outer CSC level)
-//         scf.while  (co-iterate A's compressed j  ∩  B's compressed j)
-//           C[i,k] += A[i,j] * B[j,k]
+//     for i  (parallel, dense — from B's outer level)
+//       for k  (parallel, dense — from C's outer CSC level)
+//         scf.while  (co-iterate B's compressed j  ∩  C's compressed j)
+//           A[i,k] += B[i,j] * C[j,k]
 // ---------------------------------------------------------------------------
 func.func @spgemm(
-    %argA: tensor<?x?xf64, #CSR>,   // A(i,j)
-    %argB: tensor<?x?xf64, #CSC>    // B(j,k)
+    %argB: tensor<?x?xf64, #CSR>,   // B(i,j)
+    %argC: tensor<?x?xf64, #CSC>    // C(j,k)
 ) -> tensor<?x?xf64> {
 
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
 
-  // Output dimensions: i from A's dim-0, k from B's dim-1
-  %dim_i = tensor.dim %argA, %c0 : tensor<?x?xf64, #CSR>
-  %dim_k = tensor.dim %argB, %c1 : tensor<?x?xf64, #CSC>
+  // Output dimensions: i from B's dim-0, k from C's dim-1
+  %dim_i = tensor.dim %argB, %c0 : tensor<?x?xf64, #CSR>
+  %dim_k = tensor.dim %argC, %c1 : tensor<?x?xf64, #CSC>
 
-  // Initialize dense output C(i,k) to zero
-  %initC  = tensor.empty(%dim_i, %dim_k) : tensor<?x?xf64>
+  // Initialize dense output A(i,k) to zero
+  %initA  = tensor.empty(%dim_i, %dim_k) : tensor<?x?xf64>
   %c0_f64 = arith.constant 0.0 : f64
-  %zeroC  = linalg.fill ins(%c0_f64 : f64) outs(%initC : tensor<?x?xf64>) -> tensor<?x?xf64>
+  %zeroA  = linalg.fill ins(%c0_f64 : f64) outs(%initA : tensor<?x?xf64>) -> tensor<?x?xf64>
 
   // ---------------------------------------------------------------------------
   // 3D Linalg Generic
   //   Iteration order: (i, k, j)
   //   — i and k are the two parallel loops (outer)
-  //   — j is the innermost reduction; compressed in both A and B
+  //   — j is the innermost reduction; compressed in both B and C
   //     → the sparse compiler emits an scf.while co-iteration here
   // ---------------------------------------------------------------------------
   %result = linalg.generic {
     indexing_maps = [
-      affine_map<(i, k, j) -> (i, j)>,   // A(i,j)
-      affine_map<(i, k, j) -> (j, k)>,   // B(j,k)
-      affine_map<(i, k, j) -> (i, k)>    // C(i,k)  out
+      affine_map<(i, k, j) -> (i, j)>,   // B(i,j)
+      affine_map<(i, k, j) -> (j, k)>,   // C(j,k)
+      affine_map<(i, k, j) -> (i, k)>    // A(i,k)  out
     ],
     iterator_types = ["parallel", "parallel", "reduction"]
-  } ins(%argA, %argB : tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>)
-    outs(%zeroC : tensor<?x?xf64>) {
-  ^bb0(%a: f64, %b: f64, %c_in: f64):
-    // C[i,k] += A[i,j] * B[j,k]
-    %prod  = arith.mulf %a, %b   : f64
-    %c_out = arith.addf %c_in, %prod : f64
-    linalg.yield %c_out : f64
+  } ins(%argB, %argC : tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>)
+    outs(%zeroA : tensor<?x?xf64>) {
+  ^bb0(%b: f64, %c: f64, %a_in: f64):
+    // A[i,k] += B[i,j] * C[j,k]
+    %prod  = arith.mulf %b, %c   : f64
+    %a_out = arith.addf %a_in, %prod : f64
+    linalg.yield %a_out : f64
   } -> tensor<?x?xf64>
 
   return %result : tensor<?x?xf64>
@@ -106,20 +106,20 @@ func.func @spgemm(
 // Main Benchmark Routine
 // ===========================================================================
 func.func @main() {
-  %file_a = llvm.mlir.addressof @fileA : !llvm.ptr
   %file_b = llvm.mlir.addressof @fileB : !llvm.ptr
+  %file_c = llvm.mlir.addressof @fileC : !llvm.ptr
 
-  %A = sparse_tensor.new %file_a : !llvm.ptr to tensor<?x?xf64, #CSR>
-  %B = sparse_tensor.new %file_b : !llvm.ptr to tensor<?x?xf64, #CSC>
+  %B = sparse_tensor.new %file_b : !llvm.ptr to tensor<?x?xf64, #CSR>
+  %C = sparse_tensor.new %file_c : !llvm.ptr to tensor<?x?xf64, #CSC>
 
   %c0    = arith.constant 0 : index
   %c1    = arith.constant 1 : index
-  %iters = arith.constant 25 : index
+  %iters = arith.constant 6 : index
 
   // ==========================================
   // Correctness check: compute one result and print it
   // ==========================================
-  %ref_result = func.call @spgemm(%A, %B)
+  %ref_result = func.call @spgemm(%B, %C)
     : (tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>) -> tensor<?x?xf64>
 
   %c0_idx = arith.constant 0 : index
@@ -134,7 +134,7 @@ func.func @main() {
 
   scf.for %iter = %c0 to %iters step %c1 {
     %start_iter = func.call @rtclock() : () -> f64
-    %res = func.call @spgemm(%A, %B)
+    %res = func.call @spgemm(%B, %C)
       : (tensor<?x?xf64, #CSR>, tensor<?x?xf64, #CSC>) -> tensor<?x?xf64>
     %end_iter = func.call @rtclock() : () -> f64
     %elapsed_iter = arith.subf %end_iter, %start_iter : f64
@@ -159,8 +159,8 @@ func.func @main() {
 
   memref.dealloc %times : memref<25xf64>
 
-  bufferization.dealloc_tensor %A : tensor<?x?xf64, #CSR>
-  bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSC>
+  bufferization.dealloc_tensor %B : tensor<?x?xf64, #CSR>
+  bufferization.dealloc_tensor %C : tensor<?x?xf64, #CSC>
 
   return
 }

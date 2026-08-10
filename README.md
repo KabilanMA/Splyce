@@ -556,7 +556,7 @@ Run every command below from inside the `experiments` directory.
 ```bash
 ./run.sh all # took ~11 hours in our server
 ```
-> `all` runs every experiment above sequentially (including the SuiteSparse downloads for the `_realworld` kernels), so it needs network access and can take a while. `table2` and `realdata` also print/write their combined summary tables once their five kernels finish; `all` prints both.
+> `all` runs every experiment above sequentially (including the SuiteSparse downloads for the `_realworld` kernels), so it needs network access and can take a while.
 
 #### Experiment 1 - Phase Ablation
 

@@ -1,0 +1,9 @@
+Kernel Name,Dataset,Baseline (s),Splyce (s),Speedup (x)
+spgemm,internet,211.103385,213.518343,0.99
+spgemm,exdata_1,108.199823,99.696661,1.09
+spgemm,heart1,34.018312,17.949310,1.90
+spgemm,c8_mat11,115.294555,52.062893,2.21
+spmmh,bayer01,52.287433,54.979995,0.95
+spmspv,stokes,6.969495,4.121708,1.69
+spmttkrp,heart1,1384.699887,632.915455,2.19
+spttspm,barth4,24.939699,23.630279,1.06

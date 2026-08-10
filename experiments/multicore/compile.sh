@@ -40,10 +40,25 @@ SRC="./spmttkrp.mlir"
 TARGET_FUNCTION="spmttkrp"
 PHASE="001"
 
+# clang auto-adds its own runtime lib dir (e.g. lib/<target-triple>/) to
+# the link-time search path, so -fopenmp always links — but that dir isn't
+# necessarily $LLVM_INSTALL/lib (the rpath below), so without this the
+# resulting binaries can silently depend on whatever libomp.so (if any)
+# happens to already be on the *running* machine's linker search path at
+# runtime, instead of the one they were actually built against.
+LIBOMP_PATH="$(clang -print-file-name=libomp.so)"
+LIBOMP_RPATH_FLAGS=()
+if [[ "$LIBOMP_PATH" == /* && -f "$LIBOMP_PATH" ]]; then
+  LIBOMP_RPATH_FLAGS=(-Wl,-rpath,"$(dirname "$LIBOMP_PATH")")
+else
+  echo "WARNING: clang could not locate libomp.so — the compiled binaries may fail to run unless a system libomp is already installed." >&2
+fi
+
 CLANG_FLAGS=(
   -O3 -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize -fopenmp
   -L"${LLVM_INSTALL}/lib" -lmlir_c_runner_utils -lmlir_runner_utils
   -Wl,-rpath,"${LLVM_INSTALL}/lib"
+  "${LIBOMP_RPATH_FLAGS[@]}"
 )
 
 # $1 = input LLVM-dialect .mlir, $2 = output binary path

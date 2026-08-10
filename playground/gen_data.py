@@ -157,6 +157,17 @@ def generate_sparse_4d_tns(filename, dim1, dim2, dim3, dim4, sparsity):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Generate playground/tensor_B.tns and tensor_C.tns (square sparse 2D matrices)."
+    )
+    parser.add_argument("dimension", nargs="?", type=int, default=5000,
+                         help="Square matrix dimension for both tensors (default: 5000)")
+    parser.add_argument("sparsity", nargs="?", type=float, default=0.95,
+                         help="Fraction of zero entries, in [0, 1) (default: 0.95)")
+    args = parser.parse_args()
+
     playground_dir = os.path.dirname(os.path.abspath(__file__))
-    generate_sparse_2d_tns(os.path.join(playground_dir, "tensor_B.tns"), 5000, 5000, sparsity=0.95)
-    generate_sparse_2d_tns(os.path.join(playground_dir, "tensor_C.tns"), 5000, 5000, sparsity=0.95)
+    generate_sparse_2d_tns(os.path.join(playground_dir, "tensor_B.tns"), args.dimension, args.dimension, sparsity=args.sparsity)
+    generate_sparse_2d_tns(os.path.join(playground_dir, "tensor_C.tns"), args.dimension, args.dimension, sparsity=args.sparsity)

@@ -7,12 +7,13 @@ Splyce is an MLIR optimization pass that vectorizes 2-way co-iteration loops in 
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [Building and Installation](#building-and-installation)
-- [Usage Examples](#usage-examples)
+- [Getting Started](#getting-started)
+  - [Quick Start](#quick-start)
+  - [Usage Examples](#usage-examples)
+- [Docker](#docker)
 - [Evaluation](#evaluation)
-  - [Automated Benchmark Script](#automated-benchmark-script)
-  - [Evaluation Metrics](#evaluation-metrics)
-- [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 
 ---
@@ -24,13 +25,13 @@ Splyce is an MLIR optimization pass that vectorizes 2-way co-iteration loops in 
 Splyce tackles the vectorization bottleneck in sparse tensor computations. Traditional sparse dialect lowering produces scalar coiteration loops that:
 - Check tensor coordinates on each iteration
 - Branch based on coordinate comparisons
-- Cannot be auto-vectorized by conventional compilers
+- Cannot be auto-vectorized by conventional general purpose compilers
 
-Splyce recognizes these patterns and converts them into vectorized "fast lanes" using SIMD operations with masked execution, achieving **2-way parallelism** on existing CPU architectures.
+Splyce recognizes these patterns and converts them into vectorized "fast lanes" using SIMD operations with masked execution and Scalar Epilogue as a dual-path strategy.
 
 ### Key Features
 
-- **2-Way Co-Iteration Vectorization**: Vectorizes pointer-chasing loops in sparse tensor operations
+- **2-Way Coiteration Vectorization**: Vectorizes pointer-chasing loops in sparse tensor operations
 - **SIMD Fast-Lane Generation**: Creates masked SIMD execution paths for coordinate matching
 - **Scalar Epilogue**: Keep the previous scalar coiteration loop as an epilogue.
 - **Configurable Vector Width**: Supports flexible SIMD width selection (4, 8, 16, etc.)
@@ -57,6 +58,11 @@ Splyce recognizes these patterns and converts them into vectorized "fast lanes" 
 - **Git**
 - **Python** 3.10+
 - **C++ Compiler** (GCC 13+)
+- **CPU**: `x86_64` -- AVX-512 (F + VL) support required only for [Evaluation](#evaluation) (`experiments/`); [Getting Started](#getting-started) and [Usage Examples](#usage-examples) run on any `x86_64` CPU.
+
+> `experiments/`'s `clang` invocations hardcode `-mavx512f -mavx512vl` on purpose -- that pins every kernel to the exact ISA the paper's reference numbers were measured on, so results stay comparable across runs. It was only tested on AVX-512 hardware, and won't build/run on anything else.
+>
+> [Getting Started](#getting-started) (`playground/run.sh`) and [Usage Examples](#usage-examples)' `clang` invocations instead use `-march=native`, so you can build and run them on whatever CPU you actually have, AVX-512 or not, just to see Splyce work end-to-end. The tradeoff: performance and speedup numbers from these aren't meant to be compared against the paper's reference numbers or across machines -- only `experiments/` is held to that bar.
 
 ### Platform-Specific Installation
 
@@ -116,7 +122,7 @@ cmake -S llvm -B build -G Ninja \
   -DCMAKE_C_COMPILER=gcc \
   -DCMAKE_CXX_COMPILER=g++ \
   -DLLVM_ENABLE_ASSERTIONS=OFF \
-  -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install
+  -DCMAKE_INSTALL_PREFIX=$HOME/llvm-install \
   -DRUNTIMES_CMAKE_ARGS="-DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13;-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"
 ```
 
@@ -168,9 +174,43 @@ ninja -C build
 
 ---
 
-## Usage Examples
+## Getting Started
 
-### Overview: Compilation Pipeline
+Once you've built Splyce ([Building and Installation](#building-and-installation)), the fastest way to see it work is [Quick Start](#quick-start) below - one command compiles `playground/spgemm.mlir` both ways, generates its input data if needed, runs both binaries, and prints the speedup. [Usage Examples](#usage-examples) then walks through what that command does under the hood, one pipeline stage at a time, for when you need to inspect or modify the IR yourself.
+
+### Quick Start
+
+```bash
+./playground/run.sh spgemm single
+```
+
+This compiles `playground/spgemm.mlir` two ways - a plain `mlir-opt --sparsifier` baseline and a Splyce-vectorized version (vector-width 4, phase-select 001) - generates `tensor_B.tns`/`tensor_C.tns` in `playground/` if they don't already exist, runs both binaries once each, and prints:
+
+```
+Kernel:       spgemm
+Mode:         single
+Baseline (s): <t>
+Splyce (s):   <t>
+Speedup (x):  <t>
+```
+
+For the OpenMP-parallel pipeline instead ([Usage Examples, Example 2](#example-2-multi-threaded-spgemm-openmp)), swap `single` for `multicore`:
+```bash
+./playground/run.sh spgemm multicore [cores]
+```
+Baseline and Splyce are both compiled with `--parallelization` (`mlir-opt --sparsifier` has no OpenMP-aware lowering, so the baseline goes through `splyce-opt` too here — just without `--splyce` in between) and run pinned to the same core count, so the printed speedup isolates vectorization's contribution rather than mixing in threading. `[cores]` defaults to every CPU on NUMA node 0 (override via the `NUMA_NODE` env var) when `numactl` is available, else `nproc`.
+
+**Prerequisites**: same as [Building and Installation](#building-and-installation) — `LLVM_INSTALL` set, `mlir-opt`/`mlir-translate`/`clang` on `$PATH`, and `build/bin/splyce-opt`/`build/bin/splyce-translate` already built. `multicore` mode additionally needs `clang` able to find `libomp` for `-fopenmp` to link.
+
+**Regenerating input data:** `run.sh` only generates `tensor_B.tns`/`tensor_C.tns` when they're missing - it won't overwrite ones you already have. To use a different size/sparsity, generate them yourself first (this overwrites any existing tensors):
+```bash
+./playground/gen_data.sh [dimension] [sparsity]
+```
+Defaults to a 5000×5000 matrix at 95% sparsity if both are omitted - i.e. `./playground/gen_data.sh` on its own is equivalent to `./playground/gen_data.sh 5000 0.95`.
+
+### Usage Examples
+
+#### Overview: Compilation Pipeline
 
 A typical Splyce evaluation workflow:
 
@@ -192,9 +232,9 @@ need to inspect or modify the IR between passes.
 - `--splyce="..."`: The vectorization pass itself (unchanged either way).
 
 
-### Example 1: Single-Threaded SpGEMM
+#### Example 1: Single-Threaded SpGEMM
 
-#### Option A: `splyce-opt` only (single command)
+##### Option A: `splyce-opt` only (single command)
 
 ```bash
 ./build/bin/splyce-opt ./playground/spgemm.mlir \
@@ -212,7 +252,7 @@ need to inspect or modify the IR between passes.
 
 Continue with **1.4 Generate Binary** below.
 
-#### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
+##### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
 
 **1.1 Lower Sparse Tensor to SCF**
 
@@ -287,7 +327,7 @@ Both options produce the same `./playground/spgemm_llvm.mlir`.
   -o ./playground/spgemm_splyce.ll
 
 clang -O3 ./playground/spgemm_splyce.ll \
-  -mavx512f -mavx512vl \
+  -march=native \
   -fno-vectorize -fno-slp-vectorize \
   -L"$LLVM_INSTALL/lib" \
   -lmlir_c_runner_utils \
@@ -333,7 +373,7 @@ Using `splyce-opt` with the `Splyce` pass disabled:
 Generate the binary from Clang:
 ```bash
 clang -O3 ./playground/spgemm_baseline.ll \
-  -mavx512f -mavx512vl \
+  -march=native \
   -fno-vectorize -fno-slp-vectorize \
   -L"$LLVM_INSTALL/lib" \
   -lmlir_c_runner_utils \
@@ -347,9 +387,9 @@ and now run the baseline:
 cd playground && ./test_benchmark_spgemm_baseline
 ```
 
-### Example 2: Multi-Threaded SpGEMM (OpenMP)
+#### Example 2: Multi-Threaded SpGEMM (OpenMP)
 
-#### Option A: `splyce-opt` only (single command)
+##### Option A: `splyce-opt` only (single command)
 
 ```bash
 ./build/bin/splyce-opt ./playground/spgemm.mlir \
@@ -362,7 +402,7 @@ cd playground && ./test_benchmark_spgemm_baseline
 
 Continue with **2.4 Generate Parallel Binary** below.
 
-#### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
+##### Option B: `mlir-opt` + `splyce-opt` (step-by-step)
 
 **2.1 Lower Sparse Tensor to SCF (with parallelization)**
 
@@ -423,13 +463,15 @@ Both options produce the same `./playground/spgemm_llvm_parallel.mlir`.
 
 **2.4 Generate Parallel Binary**
 
+`-fopenmp` always *links* successfully — clang auto-adds its own runtime lib dir (e.g. `lib/<target-triple>/`, where `libomp.so` actually lives when LLVM is built as in [Step 1](#step-1-setup-llvm--mlir)) to the link-time search path automatically. But that dir usually isn't `$LLVM_INSTALL/lib` (the rpath below is for `libmlir_c_runner_utils`/`libmlir_runner_utils`, which *are* directly under it), so without also rpath'ing `libomp.so`'s real directory, the binary can silently depend on whatever `libomp.so` (if any) happens to already be on the machine you *run* it on, instead of the one it was actually built against — and fail outright with "cannot open shared object file" on a machine with no system-wide `libomp` at all (e.g. a fresh Docker container):
+
 ```bash
 ./build/bin/splyce-translate ./playground/spgemm_llvm_parallel.mlir \
   --mlir-to-llvmir \
   -o ./playground/spgemm_splyce_parallel.ll
 
 clang -O3 ./playground/spgemm_splyce_parallel.ll \
-  -mavx512f -mavx512vl \
+  -march=native \
   -fopenmp \
   -fno-vectorize \
   -fno-slp-vectorize \
@@ -437,6 +479,7 @@ clang -O3 ./playground/spgemm_splyce_parallel.ll \
   -lmlir_c_runner_utils \
   -lmlir_runner_utils \
   -Wl,-rpath,"$LLVM_INSTALL/lib" \
+  -Wl,-rpath,"$(dirname "$(clang -print-file-name=libomp.so)")" \
   -o ./playground/test_benchmark_spgemm_splyce_parallel
 ```
 
@@ -460,9 +503,40 @@ cd playground && OMP_NUM_THREADS=4 ./test_benchmark_spgemm_splyce_parallel
 
 ---
 
-## Evaluation
+## Docker
 
-### Automated Benchmark Script
+The [Dockerfile](Dockerfile) at the repo root builds LLVM/MLIR/clang from the pinned commit in [Building and Installation](#building-and-installation), builds Splyce against it, and produces an image that can run everything in [Usage Examples](#usage-examples) out of the box - no local LLVM build required.
+
+> Covers the build + Usage Examples workflow only for now — it doesn't (yet) bundle `experiments/` (the [Evaluation](#evaluation) harness).
+
+**Build:**
+```bash
+docker build -t splyce .
+```
+Building LLVM from source is the expensive part - expect it to take a while and to need a fair amount of RAM (clang's link step is memory-hungry) and disk space. If the build gets OOM-killed, cap ninja's parallelism:
+```bash
+docker build -t splyce --build-arg NINJA_JOBS=4 .
+```
+Other supported build args: `LLVM_COMMIT` (track a different upstream revision) and `GCC_MAJOR_VERSION` (see Caveats below).
+
+**Run:**
+```bash
+docker run --rm -it splyce
+```
+This drops you into a shell at `/splyce` with `mlir-opt`, `mlir-translate`, `clang`, `splyce-opt`, and `splyce-translate` all on `$PATH` and `$LLVM_INSTALL` already set - paste any command from [Usage Examples](#usage-examples) directly (e.g. everything in **Example 1: Single-Threaded SpGEMM** works as-is; the compiled binary's output is a plain benchmark timing, not anything image-specific).
+
+Non-interactively, the same build already self-checks that `splyce-opt` works (mirroring [Step 3: Verify Build](#step-3-verify-build)) — you can rerun that check any time with:
+```bash
+docker run --rm splyce ./build/bin/splyce-opt --help | grep splyce
+```
+
+**Caveats:**
+- The image is built for `x86_64` (`gcc-13`/`ubuntu:24.04`, matching the `--gcc-install-dir` path used in [Building and Installation](#building-and-installation)). [Usage Examples](#usage-examples)' `clang` invocations use `-march=native`, and since Docker doesn't virtualize instruction sets, that resolves against whatever CPU is actually running the container at the time — AVX-512 or not — the same way it would on bare metal. It's still `x86_64`-only: an Arm host (e.g. Apple Silicon under Docker Desktop) can't run this image at all, regardless of `-march=native`.
+- Unlike the native build in [Building and Installation](#building-and-installation), you shouldn't need to touch the GCC path yourself — the image installs its own `gcc-13`/`g++-13` and derives `--gcc-install-dir` from that automatically, so there's no host-specific path to discover. If you do need a different GCC major version (e.g. the `ubuntu:24.04` repos stop carrying `13`), pass `--build-arg GCC_MAJOR_VERSION=<N>`; it drives both the installed `gcc-<N>`/`g++-<N>` packages and the derived `--gcc-install-dir` path together, so the two can't drift out of sync.
+
+---
+
+## Evaluation
 
 Every experiment lives under the `experiments` directory, and each one has its own `compile.sh`/`run.sh` (or, for the real-world-data kernels, `compile.sh`/`run_suitesparse_benchmark.py`) — but all of them are driven from a single entry point, `experiments/run.sh`.
 
@@ -472,7 +546,7 @@ Every experiment lives under the `experiments` directory, and each one has its o
 - Every plotting experiment (anything other than `table2`/`realdata`) needs `matplotlib`. Set up a virtual environment once before running anything:
   ```bash
   python3 -m venv venv
-  source venv/bin/activate
+  . venv/bin/activate
   pip install matplotlib
   ```
 
@@ -480,7 +554,7 @@ Run every command below from inside the `experiments` directory.
 
 `experiments` has four standalone experiment directories (`phase_ablation`, `vector_width`, `sparsity_scaling`, `multicore`) plus a `speedups/{synthetic_data,real_world_data}/{spgemm,spmmh,spmspv,spmttkrp,spttspm}` tree — 14 named experiments in total, each runnable individually by name. All of them can also run in one shot:
 ```bash
-./run.sh all
+./run.sh all # took ~11 hours in our server
 ```
 > `all` runs every experiment above sequentially (including the SuiteSparse downloads for the `_realworld` kernels), so it needs network access and can take a while. `table2` and `realdata` also print/write their combined summary tables once their five kernels finish; `all` prints both.
 

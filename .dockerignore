@@ -1,0 +1,24 @@
+# Keep the build context small and avoid copying stale generated
+# artifacts into the image (all of these are regenerated inside the
+# build anyway, or aren't needed for the Docker build + Usage Examples
+# workflow).
+.git
+.gitignore
+.vscode
+
+build/
+build*/
+__pycache__/
+**/__pycache__/
+
+*.ll
+*.tns
+*.mtx
+test_benchmark_*
+
+# Evaluation harness — not included in the image yet.
+experiments/
+
+# Not needed to build Splyce or run the Usage Examples.
+test/
+out_dated_README.md

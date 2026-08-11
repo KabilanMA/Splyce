@@ -564,7 +564,7 @@ Phase ablation is the experiment to find which phase configuration gives the bet
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh phase_ablation
+./run.sh phase_ablation # took ~40 minutes in our server
 ```
 
 This will generate two files:
@@ -578,7 +578,7 @@ This experiment automatically generates the required data and will produce the e
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh table2
+./run.sh table2 # took ~40 minutes in our server
 ```
 This generates a `results.csv` file inside each kernel's directory under `speedups/synthetic_data`, plus one combined `speedups/synthetic_data/speedup_summary.csv` - use `speedups/synthetic_data/speedup_summary_reference.csv` for reference.
 
@@ -599,7 +599,7 @@ In different hardware depending on their capabilities the vector width to get th
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh vector_width
+./run.sh vector_width # took ~1.5 hours in our server
 ```
 
 This will generate two results files:
@@ -612,7 +612,7 @@ This experiment is to show that Splyce's performance increase with increasing no
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh sparsity_scaling
+./run.sh sparsity_scaling # took ~30 minutes in our server
 ```
 
 This will generate two results files:
@@ -625,7 +625,7 @@ This experiment is to show the performance speedup Splyce produce for single cor
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh multicore
+./run.sh multicore # took ~15 minutes in our server
 ```
 
 This will generate two results files:
@@ -640,7 +640,7 @@ This is to show that Splyce not only gives performance on synthetic data but als
 
 You can simply run this experiment as follows:
 ```bash
-./run.sh realdata
+./run.sh realdata # took ~7-8 hours in our server
 ```
 
 This downloads the required matrices, runs them on all five kernels, and produces `speedups/real_world_data/realworld_summary.csv` - compare against `speedups/real_world_data/realworld_summary_reference.csv` for reference.

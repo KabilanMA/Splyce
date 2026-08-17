@@ -77,6 +77,13 @@
 #   ./run.sh <experiment> [...]    # one or more individual experiments by name
 #                                   # (e.g. ./run.sh phase_ablation, or
 #                                   # ./run.sh spgemm_speedup spmspv_speedup)
+#
+#   REALWORLD_MODE=multicore REALWORLD_CORES=n ./run.sh <realworld-experiment>
+#       Real-world-data experiments only. Passes --mode multicore (and
+#       --cores "$REALWORLD_CORES", if that's also set) to the underlying
+#       run_suitesparse_*.py script instead of the default single-threaded
+#       run. To pin these to a specific NUMA node/CPU set, wrap the whole
+#       ./run.sh invocation in `numactl ...`.
 
 set -euo pipefail
 
@@ -117,6 +124,10 @@ declare -A EXPERIMENT_DIR=(
   [spmspv_realworld]="speedups/real_world_data/spmspv"
   [spmttkrp_realworld]="speedups/real_world_data/spmttkrp"
   [spttspm_realworld]="speedups/real_world_data/spttspm"
+  [spgemm_realworld_sweep]="speedups/real_world_data/spgemm"
+  [spmspv_realworld_sweep]="speedups/real_world_data/spmspv"
+  [spmttkrp_realworld_sweep]="speedups/real_world_data/spmttkrp"
+  [spmttkrp_frostt]="speedups/real_world_data/spmttkrp"
 )
 
 # "table2" run.sh target: the five synthetic-data speedup kernels.
@@ -144,6 +155,13 @@ usage() {
   echo "  realdata            - run ${REALDATA_EXPERIMENTS[*]}" >&2
   echo "  <experiment> [...]  - run one or more individual experiments by name" >&2
   echo "Available experiments: ${ALL_EXPERIMENTS[*]}" >&2
+  echo "Also available individually (not in 'all'/'realdata' — spans ~169" >&2
+  echo "SuiteSparse groups, some multi-billion nnz): spgemm_realworld_sweep," >&2
+  echo "spmspv_realworld_sweep, spmttkrp_realworld_sweep" >&2
+  echo "  (run its script directly with --matrix <name> for just one matrix)" >&2
+  echo "Also available individually: spmttkrp_frostt (real 3D FROSTT tensor" >&2
+  echo "for spmttkrp's tensor_B — ~600MB download, see" >&2
+  echo "speedups/real_world_data/frostt/download_data.py for available names)" >&2
   exit 1
 }
 
@@ -174,14 +192,29 @@ case "$1" in
     ;;
 esac
 
-# Experiment names driven by run_suitesparse_benchmark.py (compile.sh +
-# a curated real/synthetic matrix pairing) instead of gen_data.sh + run.sh.
+# Experiment names driven by a downloading python script (compile.sh +
+# that script) instead of gen_data.sh + run.sh — every one of these is
+# SuiteSparse-based except spmttkrp_frostt (FROSTT-based; see
+# speedups/real_world_data/frostt/download_data.py).
 REALWORLD_EXPERIMENTS=(
   spgemm_realworld
   spmmh_realworld
   spmspv_realworld
   spmttkrp_realworld
   spttspm_realworld
+  spgemm_realworld_sweep
+  spmspv_realworld_sweep
+  spmttkrp_realworld_sweep
+  spmttkrp_frostt
+)
+
+# Which script each realworld experiment's directory is run with —
+# defaults to run_suitesparse_benchmark.py below when unset here.
+declare -A REALWORLD_SCRIPT=(
+  [spgemm_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmspv_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmttkrp_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmttkrp_frostt]="run_frostt_benchmark.py"
 )
 
 is_realworld() {
@@ -190,6 +223,13 @@ is_realworld() {
     [[ "$rw" == "$name" ]] && return 0
   done
   return 1
+}
+
+# spmttkrp_frostt is FROSTT-based, not SuiteSparse-based — no
+# matrix_metadata.json scrape needed for it.
+is_suitesparse() {
+  local name="$1"
+  is_realworld "$name" && [[ "$name" != "spmttkrp_frostt" ]]
 }
 
 SUITESPARSE_DIR="$SCRIPT_DIR/speedups/real_world_data/suitesparse"
@@ -203,7 +243,7 @@ for experiment in "${EXPERIMENTS[@]}"; do
   echo "========================================"
 
   if is_realworld "$experiment"; then
-    if [[ ! -f "$SUITESPARSE_METADATA" ]]; then
+    if is_suitesparse "$experiment" && [[ ! -f "$SUITESPARSE_METADATA" ]]; then
       echo "[$experiment] matrix_metadata.json not found — scraping SuiteSparse metadata (one-time) ..."
       ( cd "$SUITESPARSE_DIR" && ./scrape_metadata.py )
     fi
@@ -211,8 +251,14 @@ for experiment in "${EXPERIMENTS[@]}"; do
     echo "[$experiment] Compiling ..."
     ( cd "$exp_dir" && ./compile.sh )
 
-    echo "[$experiment] Downloading real-world data and running ..."
-    ( cd "$exp_dir" && ./run_suitesparse_benchmark.py --timeout 100000)
+    script="${REALWORLD_SCRIPT[$experiment]:-run_suitesparse_benchmark.py}"
+    script_args=(--timeout 1000000000)
+    if [[ "${REALWORLD_MODE:-single}" == "multicore" ]]; then
+      script_args+=(--mode multicore)
+      [[ -n "${REALWORLD_CORES:-}" ]] && script_args+=(--cores "$REALWORLD_CORES")
+    fi
+    echo "[$experiment] Downloading real-world data and running ($script${REALWORLD_MODE:+, mode=$REALWORLD_MODE}) ..."
+    ( cd "$exp_dir" && "./$script" "${script_args[@]}" )
 
     echo "[$experiment] Deleting compiled binaries ..."
     rm -f "$exp_dir"/test_benchmark_*

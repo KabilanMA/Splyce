@@ -50,6 +50,13 @@
 #   ./run_suitesparse_benchmark.py
 #   ./run_suitesparse_benchmark.py --timeout 600  # per-binary-run timeout
 #                                                  # in seconds (default 300)
+#   ./run_suitesparse_benchmark.py --mode multicore [--cores N]
+#       Runs the OpenMP dense-outer-loop parallel binaries (compile.sh's
+#       *_parallel variants) with OMP_NUM_THREADS=N instead of the
+#       single-threaded ones. --cores defaults to every CPU on the machine
+#       (os.cpu_count()). To pin these to a specific NUMA node/CPU set,
+#       wrap the whole command in `numactl ...` — nothing here sets its own
+#       CPU affinity, so an outer numactl applies to every binary run.
 
 import csv
 import os
@@ -68,6 +75,8 @@ import convert_to_tns as cvt  # noqa: E402
 
 BASELINE_BIN = os.path.join(SCRIPT_DIR, "test_benchmark_spmspv_scf")
 SPLYCE_BIN = os.path.join(SCRIPT_DIR, "test_benchmark_spmspv_splyce_phase_001")
+BASELINE_BIN_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spmspv_scf_parallel")
+SPLYCE_BIN_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spmspv_splyce_phase_001_parallel")
 
 SUMMARY_CSV = os.path.join(SCRIPT_DIR, "spmspv_realworld_results.csv")
 RAW_BACKUP_CSV = os.path.join(SCRIPT_DIR, "spmspv_realworld_raw_runtimes.csv")
@@ -102,9 +111,12 @@ def median_excl_first(times):
     return statistics.median(rest) if rest else None
 
 
-def run_binary(bin_path, timeout):
+def run_binary(bin_path, timeout, cores=None):
     if os.path.isfile(BENCHMARK_FILE):
         os.remove(BENCHMARK_FILE)
+    env = os.environ.copy()
+    if cores is not None:
+        env["OMP_NUM_THREADS"] = str(cores)
     try:
         subprocess.run(
             [bin_path],
@@ -112,6 +124,7 @@ def run_binary(bin_path, timeout):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print(f"    [timeout] {os.path.basename(bin_path)} exceeded {timeout}s")
@@ -126,19 +139,37 @@ def run_binary(bin_path, timeout):
 
 
 def already_recorded():
+    # Keyed on (dataset, mode) — not dataset alone — so a job already
+    # recorded in one mode doesn't shadow a run of it in the other mode.
     if not os.path.isfile(SUMMARY_CSV):
         return set()
     with open(SUMMARY_CSV) as f:
-        return {row["dataset"] for row in csv.DictReader(f)}
+        return {(row["dataset"], row.get("mode", "single")) for row in csv.DictReader(f)}
 
 
 def main():
     args = sys.argv[1:]
     timeout = 300
+    mode = "single"
+    cores = None
     if "--timeout" in args:
         timeout = int(args[args.index("--timeout") + 1])
+    if "--mode" in args:
+        mode = args[args.index("--mode") + 1]
+    if "--cores" in args:
+        cores = int(args[args.index("--cores") + 1])
 
-    if not (os.path.isfile(BASELINE_BIN) and os.path.isfile(SPLYCE_BIN)):
+    if mode not in ("single", "multicore"):
+        sys.exit(f"error: unsupported --mode '{mode}' (supported: single, multicore)")
+    if cores is not None and mode != "multicore":
+        sys.exit("error: --cores is only meaningful with --mode multicore")
+    if mode == "multicore" and cores is None:
+        cores = os.cpu_count()
+
+    baseline_bin = BASELINE_BIN_PARALLEL if mode == "multicore" else BASELINE_BIN
+    splyce_bin = SPLYCE_BIN_PARALLEL if mode == "multicore" else SPLYCE_BIN
+
+    if not (os.path.isfile(baseline_bin) and os.path.isfile(splyce_bin)):
         sys.exit("error: binaries not found — run ./compile.sh first")
 
     metadata = dl.load_metadata()
@@ -148,8 +179,8 @@ def main():
     name, group = entry["name"], entry["group"]
 
     done = already_recorded()
-    if name in done:
-        print(f"{name} already recorded — nothing to do")
+    if (name, mode) in done:
+        print(f"{name} ({mode}) already recorded — nothing to do")
         return
 
     write_summary_header = not os.path.isfile(SUMMARY_CSV)
@@ -161,7 +192,8 @@ def main():
         if write_summary_header:
             summary_writer.writerow([
                 "dataset", "group", "matrix_dim", "matrix_nnz", "matrix_sparsity",
-                "vector_nnz", "vector_sparsity", "scf_median_s", "splyce_median_s",
+                "vector_nnz", "vector_sparsity", "mode", "cores",
+                "scf_median_s", "splyce_median_s",
             ])
         if write_raw_header:
             raw_writer.writerow(["dataset", "config", "iteration", "time_s"])
@@ -190,15 +222,17 @@ def main():
             print(f"  [vector] dim={dim} nnz={vector_nnz} sparsity={vector_sparsity:.6g} "
                   f"(matrix_sparsity={matrix_sparsity:.6g})")
 
+            run_cores = cores if mode == "multicore" else None
+
             print("  [run] splyce phase_001 ...")
-            splyce_times, splyce_timed_out = run_binary(SPLYCE_BIN, timeout)
+            splyce_times, splyce_timed_out = run_binary(splyce_bin, timeout, run_cores)
 
             if splyce_timed_out:
                 print("  [skip] splyce timed out — skipping baseline run")
                 scf_times, scf_med = None, "SKIPPED"
             else:
                 print("  [run] baseline (scf) ...")
-                scf_times, _ = run_binary(BASELINE_BIN, timeout * 5)
+                scf_times, _ = run_binary(baseline_bin, timeout * 5, run_cores)
                 scf_med = median_excl_first(scf_times) if scf_times else "NA"
 
             for i, t in enumerate(splyce_times or []):
@@ -212,7 +246,8 @@ def main():
             if splyce_med != "NA":
                 summary_writer.writerow([
                     name, group, dim, matrix_nnz, matrix_sparsity,
-                    vector_nnz, vector_sparsity, scf_med, splyce_med,
+                    vector_nnz, vector_sparsity, mode, cores or "",
+                    scf_med, splyce_med,
                 ])
             sf.flush()
             print(f"  scf_median={scf_med}  splyce_median={splyce_med}")

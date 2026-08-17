@@ -54,7 +54,7 @@ COMMON_LOWER_FLAGS=(
 )
 
 CLANG_FLAGS=(
-  -O3 -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize
+  -O3 -march=native -fno-vectorize -fno-slp-vectorize
   -L"${LLVM_INSTALL}/lib" -lmlir_c_runner_utils -lmlir_runner_utils
   -Wl,-rpath,"${LLVM_INSTALL}/lib"
 )

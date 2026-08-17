@@ -210,6 +210,28 @@ def generate_sparsity_scaling_data(sparsity_pct="1"):
     generate_sparse_2d_tns("./sparsity_scaling/tensor_B.tns", 5000, 5000, sparsity)
     generate_sparse_2d_tns("./sparsity_scaling/tensor_C.tns", 5000, 5000, sparsity)
 
+def generate_1d_vector_data(filename, dim, sparsity):
+    # Generic single-tensor entry point (unlike every other EXPERIMENTS
+    # entry, which hardcodes its own path/shape/sparsity) — lets a caller
+    # like speedups/real_world_data/spmspv/run_suitesparse_sweep.py
+    # generate one sparse vector at a dynamically-computed dim/sparsity via
+    # gen_data.sh, instead of duplicating generate_sparse_1d_tns's logic.
+    generate_sparse_1d_tns(filename, int(dim), float(sparsity))
+
+def generate_3d_tensor_data(filename, dim1, dim2, dim3, sparsity):
+    # Generic single-tensor entry point — see generate_1d_vector_data above
+    # for why (used by speedups/real_world_data/spmttkrp/
+    # run_suitesparse_sweep.py to generate its synthetic tensor_B at a
+    # dynamically-computed dim/sparsity via gen_data.sh).
+    generate_sparse_3d_tns(filename, int(dim1), int(dim2), int(dim3), float(sparsity))
+
+def generate_2d_tensor_data(filename, rows, cols, sparsity):
+    # Generic single-tensor entry point — see generate_1d_vector_data above
+    # for why (used by speedups/real_world_data/spmttkrp/
+    # run_frostt_benchmark.py to generate its synthetic tensor_C/tensor_D
+    # at dynamically-computed shapes/sparsity via gen_data.sh).
+    generate_sparse_2d_tns(filename, int(rows), int(cols), float(sparsity))
+
 def generate_vector_width_data(sparsity_pct="1"):
     # Same 5000x5000 shape and sparsity_pct convention as
     # generate_sparsity_scaling_data — see vector_width/run.sh, which
@@ -234,6 +256,9 @@ EXPERIMENTS = {
     "spmspv_speedup": generate_spmspv_speedup_data,
     "spmttkrp_speedup": generate_spmttkrp_speedup_data,
     "spttspm_speedup": generate_spttspm_speedup_data,
+    "gen_1d_vector": generate_1d_vector_data,
+    "gen_2d_tensor": generate_2d_tensor_data,
+    "gen_3d_tensor": generate_3d_tensor_data,
 }
 
 def main():

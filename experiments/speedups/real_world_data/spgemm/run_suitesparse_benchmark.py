@@ -65,6 +65,13 @@
 #   ./run_suitesparse_benchmark.py --limit 2    # only the first 2 (testing)
 #   ./run_suitesparse_benchmark.py --timeout 600  # per-binary-run timeout
 #                                                  # in seconds (default 300)
+#   ./run_suitesparse_benchmark.py --mode multicore [--cores N]
+#       Runs the OpenMP dense-outer-loop parallel binaries (compile.sh's
+#       *_parallel variants) with OMP_NUM_THREADS=N instead of the
+#       single-threaded ones. --cores defaults to every CPU on the machine
+#       (os.cpu_count()). To pin these to a specific NUMA node/CPU set,
+#       wrap the whole command in `numactl ...` — nothing here sets its own
+#       CPU affinity, so an outer numactl applies to every binary run.
 
 import csv
 import math
@@ -86,6 +93,11 @@ BASELINE_BIN_DENSE = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_scf")
 SPLYCE_BIN_DENSE = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_splyce_phase_001")
 BASELINE_BIN_CSR = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_scf")
 SPLYCE_BIN_CSR = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_splyce_phase_001")
+
+BASELINE_BIN_DENSE_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_scf_parallel")
+SPLYCE_BIN_DENSE_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_splyce_phase_001_parallel")
+BASELINE_BIN_CSR_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_scf_parallel")
+SPLYCE_BIN_CSR_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_splyce_phase_001_parallel")
 
 # A is num_rows(B) x num_cols(C); a dense f64 A needs that many * 8 bytes.
 # Past this, the dense-output binaries would fail to allocate A and crash —
@@ -158,9 +170,12 @@ def median_excl_first(times):
     return statistics.median(rest) if rest else None
 
 
-def run_binary(bin_path, timeout):
+def run_binary(bin_path, timeout, cores=None):
     if os.path.isfile(BENCHMARK_FILE):
         os.remove(BENCHMARK_FILE)
+    env = os.environ.copy()
+    if cores is not None:
+        env["OMP_NUM_THREADS"] = str(cores)
     try:
         subprocess.run(
             [bin_path],
@@ -168,6 +183,7 @@ def run_binary(bin_path, timeout):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print(f"    [timeout] {os.path.basename(bin_path)} exceeded {timeout}s")
@@ -182,10 +198,12 @@ def run_binary(bin_path, timeout):
 
 
 def already_recorded():
+    # Keyed on (dataset, mode) — not dataset alone — so a job already
+    # recorded in one mode doesn't shadow a run of it in the other mode.
     if not os.path.isfile(SUMMARY_CSV):
         return set()
     with open(SUMMARY_CSV) as f:
-        return {row["dataset"] for row in csv.DictReader(f)}
+        return {(row["dataset"], row.get("mode", "single")) for row in csv.DictReader(f)}
 
 
 def download_matrix(name, metadata):
@@ -215,13 +233,33 @@ def main():
     args = sys.argv[1:]
     limit = None
     timeout = 300
+    mode = "single"
+    cores = None
     if "--limit" in args:
         limit = int(args[args.index("--limit") + 1])
     if "--timeout" in args:
         timeout = int(args[args.index("--timeout") + 1])
+    if "--mode" in args:
+        mode = args[args.index("--mode") + 1]
+    if "--cores" in args:
+        cores = int(args[args.index("--cores") + 1])
 
-    if not (os.path.isfile(BASELINE_BIN_DENSE) and os.path.isfile(SPLYCE_BIN_DENSE)
-            and os.path.isfile(BASELINE_BIN_CSR) and os.path.isfile(SPLYCE_BIN_CSR)):
+    if mode not in ("single", "multicore"):
+        sys.exit(f"error: unsupported --mode '{mode}' (supported: single, multicore)")
+    if cores is not None and mode != "multicore":
+        sys.exit("error: --cores is only meaningful with --mode multicore")
+    if mode == "multicore" and cores is None:
+        cores = os.cpu_count()
+
+    if mode == "multicore":
+        baseline_bin_dense, splyce_bin_dense = BASELINE_BIN_DENSE_PARALLEL, SPLYCE_BIN_DENSE_PARALLEL
+        baseline_bin_csr, splyce_bin_csr = BASELINE_BIN_CSR_PARALLEL, SPLYCE_BIN_CSR_PARALLEL
+    else:
+        baseline_bin_dense, splyce_bin_dense = BASELINE_BIN_DENSE, SPLYCE_BIN_DENSE
+        baseline_bin_csr, splyce_bin_csr = BASELINE_BIN_CSR, SPLYCE_BIN_CSR
+
+    if not (os.path.isfile(baseline_bin_dense) and os.path.isfile(splyce_bin_dense)
+            and os.path.isfile(baseline_bin_csr) and os.path.isfile(splyce_bin_csr)):
         sys.exit("error: binaries not found — run ./compile.sh first")
 
     metadata = dl.load_metadata()
@@ -240,14 +278,15 @@ def main():
         if write_summary_header:
             summary_writer.writerow([
                 "dataset", "b_source", "c_source", "b_shape", "b_nnz",
-                "c_shape", "c_nnz", "format", "scf_median_s", "splyce_median_s",
+                "c_shape", "c_nnz", "format", "mode", "cores",
+                "scf_median_s", "splyce_median_s",
             ])
         if write_raw_header:
             raw_writer.writerow(["dataset", "config", "iteration", "time_s"])
 
         for job in jobs:
             name = job["name"]
-            if name in done:
+            if (name, mode) in done:
                 continue
 
             print(f"=== {name} ===")
@@ -288,15 +327,17 @@ def main():
                 dense_bytes = b_rows * c_cols * 8
                 if dense_bytes > DENSE_OUTPUT_LIMIT_BYTES:
                     fmt = "csr"
-                    baseline_bin, splyce_bin = BASELINE_BIN_CSR, SPLYCE_BIN_CSR
+                    baseline_bin, splyce_bin = baseline_bin_csr, splyce_bin_csr
                     print(f"  [format] dense output would be {dense_bytes / 1024**3:.1f} GiB "
                           f"(> {DENSE_OUTPUT_LIMIT_BYTES / 1024**3:.0f} GiB) — using CSR binaries")
                 else:
                     fmt = "dense"
-                    baseline_bin, splyce_bin = BASELINE_BIN_DENSE, SPLYCE_BIN_DENSE
+                    baseline_bin, splyce_bin = baseline_bin_dense, splyce_bin_dense
+
+                run_cores = cores if mode == "multicore" else None
 
                 print(f"  [run] splyce phase_001 ({fmt}) ...")
-                splyce_times, splyce_timed_out = run_binary(splyce_bin, timeout)
+                splyce_times, splyce_timed_out = run_binary(splyce_bin, timeout, run_cores)
 
                 if splyce_timed_out:
                     print("  [skip] splyce timed out — skipping baseline run")
@@ -304,7 +345,7 @@ def main():
                 else:
                     print(f"  [result] splyce phase_001 ({fmt}) runtime: {splyce_times}")
                     print(f"  [run] baseline (scf, {fmt}) ...")
-                    scf_times, _ = run_binary(baseline_bin, timeout * 5)
+                    scf_times, _ = run_binary(baseline_bin, timeout * 5, run_cores)
                     scf_med = median_excl_first(scf_times) if scf_times else "NA"
 
                 for i, t in enumerate(splyce_times or []):
@@ -320,7 +361,8 @@ def main():
                         name, b_name, c_source,
                         f"{b_rows}x{b_cols}", b_nnz,
                         f"{c_rows}x{c_cols}", c_nnz,
-                        fmt, scf_med, splyce_med,
+                        fmt, mode, cores or "",
+                        scf_med, splyce_med,
                     ])
                 sf.flush()
                 print(f"  scf_median={scf_med}  splyce_median={splyce_med}")

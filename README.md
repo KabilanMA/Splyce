@@ -58,11 +58,9 @@ Splyce recognizes these patterns and converts them into vectorized "fast lanes" 
 - **Git**
 - **Python** 3.10+
 - **C++ Compiler** (GCC 13+)
-- **CPU**: `x86_64` -- AVX-512 (F + VL) support required only for [Evaluation](#evaluation) (`experiments/`); [Getting Started](#getting-started) and [Usage Examples](#usage-examples) run on any `x86_64` CPU.
+- **CPU**: `x86_64` — every `clang` invocation in this repo ([Getting Started](#getting-started), [Usage Examples](#usage-examples), and [Evaluation](#evaluation)/`experiments/`) builds with `-march=native`, so everything builds and runs on whatever `x86_64` CPU you actually have.
 
-> `experiments/`'s `clang` invocations hardcode `-mavx512f -mavx512vl` on purpose -- that pins every kernel to the exact ISA the paper's reference numbers were measured on, so results stay comparable across runs. It was only tested on AVX-512 hardware, and won't build/run on anything else.
->
-> [Getting Started](#getting-started) (`playground/run.sh`) and [Usage Examples](#usage-examples)' `clang` invocations instead use `-march=native`, so you can build and run them on whatever CPU you actually have, AVX-512 or not, just to see Splyce work end-to-end. The tradeoff: performance and speedup numbers from these aren't meant to be compared against the paper's reference numbers or across machines -- only `experiments/` is held to that bar.
+> The paper's reference numbers under [Evaluation](#evaluation) were measured on AVX-512 hardware specifically. `-march=native` means every experiment still runs and produces valid results on any `x86_64` CPU, but the *numbers* it produces reflect your own machine's SIMD capabilities — they aren't meant to be compared directly against the reference CSVs, or across machines, unless yours happens to match closely.
 
 ### Platform-Specific Installation
 

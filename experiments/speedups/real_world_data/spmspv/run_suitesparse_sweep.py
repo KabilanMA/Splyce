@@ -33,7 +33,14 @@
 # overwritten, so an interrupted sweep resumes where it left off.
 #
 # Some selected matrices are enormous — use --matrix, --limit, or a tight
-# --timeout to avoid downloading/running all of them.
+# --timeout to avoid downloading/running all of them. B, x, AND the dense
+# output y are all simultaneously resident for the whole benchmark loop
+# (see spmspv.mlir's main()) — so before downloading anything, this
+# estimates the combined peak (computed from matrix_metadata.json alone)
+# and skips the job if it exceeds a memory budget (see
+# MEMORY_SAFETY_FRACTION; override with --memory-limit-gib) — same
+# mechanism ../spmttkrp/run_suitesparse_sweep.py and
+# ../spmttkrp/run_frostt_benchmark.py use.
 #
 # Prerequisite: ./compile.sh has already been run.
 #
@@ -43,6 +50,8 @@
 #   ./run_suitesparse_sweep.py --limit 10        # first 10 (testing)
 #   ./run_suitesparse_sweep.py --timeout 600     # per-binary-run timeout
 #                                                 # in seconds (default 300)
+#   ./run_suitesparse_sweep.py --memory-limit-gib 64   # override the
+#       auto-detected memory budget with a fixed cap
 #   ./run_suitesparse_sweep.py --mode multicore [--cores N]
 #       Runs the OpenMP dense-outer-loop parallel binaries (compile.sh's
 #       *_parallel variants) with OMP_NUM_THREADS=N instead of the
@@ -82,6 +91,37 @@ BENCHMARK_FILE = os.path.join(SCRIPT_DIR, "benchmark")
 # Floor for the synthetic vector's density (0.001%) — see module docstring.
 VECTOR_DENSITY_FLOOR = 0.00001
 
+# Estimated peak bytes/nonzero once a sparse tensor is loaded by the MLIR
+# sparse tensor runtime, which briefly holds a full COO intermediate
+# alongside the final level-format storage before freeing the COO (see the
+# sparse_tensor reader trace from the FROSTT-loading investigation) —
+# roughly 2x the raw coordinate size:
+#   B, 2D (2 coords + 1 value, 8 bytes each) * 2 = 48 bytes/nnz
+#   x, 1D (1 coord + 1 value, 8 bytes each) * 2  = 32 bytes/nnz
+TENSOR_2D_BYTES_PER_NNZ = 48
+TENSOR_1D_BYTES_PER_NNZ = 32
+
+# Fraction of total system RAM usable as budget — only one job runs at a
+# time (sequential sweep), so this is a fraction of the *whole machine's*
+# RAM, not divided across jobs; not the full total, to leave headroom for
+# the OS, page cache, the Python driver itself, and the fact that the
+# per-nonzero estimates above are approximate, not exact.
+MEMORY_SAFETY_FRACTION = 0.5
+
+
+def detect_total_memory_bytes():
+    # Linux-specific (/proc/meminfo) — falls back to a conservative 32 GiB
+    # if unreadable, so a detection failure fails toward skipping too much
+    # rather than too little.
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024  # value is in KiB
+    except (OSError, ValueError):
+        pass
+    return 32 * 1024 ** 3
+
 
 def generate_vector(path, dim, sparsity):
     subprocess.run(
@@ -91,8 +131,9 @@ def generate_vector(path, dim, sparsity):
         stdout=subprocess.DEVNULL,
     )
     with open(path) as f:
-        lines = f.readlines()
-    return int(lines[1].split()[1])  # header line 2: "1 <nnz>"
+        f.readline()
+        header_line = f.readline()  # header line 2: "1 <nnz>"
+    return int(header_line.split()[1])
 
 
 def median_excl_first(times):
@@ -173,6 +214,7 @@ def main():
     matrix_name = None
     mode = "single"
     cores = None
+    memory_limit_gib = None
     if "--limit" in args:
         limit = int(args[args.index("--limit") + 1])
     if "--timeout" in args:
@@ -183,6 +225,16 @@ def main():
         mode = args[args.index("--mode") + 1]
     if "--cores" in args:
         cores = int(args[args.index("--cores") + 1])
+    if "--memory-limit-gib" in args:
+        memory_limit_gib = float(args[args.index("--memory-limit-gib") + 1])
+
+    memory_budget_bytes = (
+        int(memory_limit_gib * 1024 ** 3) if memory_limit_gib is not None
+        else int(detect_total_memory_bytes() * MEMORY_SAFETY_FRACTION)
+    )
+    print(f"Memory budget per job: {memory_budget_bytes / 1024**3:.1f} GiB"
+          + (" (explicit)" if memory_limit_gib is not None else
+             f" ({MEMORY_SAFETY_FRACTION:.0%} of detected total RAM)"))
 
     if mode not in ("single", "multicore"):
         sys.exit(f"error: unsupported --mode '{mode}' (supported: single, multicore)")
@@ -235,10 +287,6 @@ def main():
             downloaded_dir = os.path.join(SUITESPARSE_DIR, name)
 
             try:
-                m_tns, downloaded_dir = download_matrix(name, entry)
-                if m_tns is None:
-                    continue
-                shutil.copyfile(m_tns, TENSOR_B)
                 dim = entry["num_rows"]
                 matrix_nnz = entry["nnz"]
                 matrix_density = matrix_nnz / (dim * dim)
@@ -246,6 +294,29 @@ def main():
 
                 vector_density = max(matrix_density, VECTOR_DENSITY_FLOOR)
                 vector_sparsity = 1.0 - vector_density
+
+                # B, x, AND the dense output y are all simultaneously
+                # resident (see module docstring) — estimate the combined
+                # peak before downloading anything. expected_vector_nnz
+                # mirrors what generate_vector will actually produce.
+                tensor_b_bytes = matrix_nnz * TENSOR_2D_BYTES_PER_NNZ
+                expected_vector_nnz = vector_density * dim
+                tensor_x_bytes = expected_vector_nnz * TENSOR_1D_BYTES_PER_NNZ
+                dense_y_bytes = dim * 8
+                estimated_peak_bytes = tensor_b_bytes + tensor_x_bytes + dense_y_bytes
+
+                if estimated_peak_bytes > memory_budget_bytes:
+                    print(f"  [skip] estimated peak memory {estimated_peak_bytes / 1024**3:.1f} GiB "
+                          f"(B={tensor_b_bytes / 1024**3:.1f} x={tensor_x_bytes / 1024**3:.1f} "
+                          f"y={dense_y_bytes / 1024**3:.1f} GiB) "
+                          f"> budget {memory_budget_bytes / 1024**3:.1f} GiB — skipping {name}")
+                    continue
+
+                m_tns, downloaded_dir = download_matrix(name, entry)
+                if m_tns is None:
+                    continue
+                shutil.copyfile(m_tns, TENSOR_B)
+
                 vector_nnz = generate_vector(TENSOR_X, dim, vector_sparsity)
                 print(f"  [vector] dim={dim} nnz={vector_nnz} sparsity={vector_sparsity:.6g} "
                       f"(matrix_sparsity={matrix_sparsity:.6g})")

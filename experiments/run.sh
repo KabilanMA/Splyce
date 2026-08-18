@@ -56,12 +56,26 @@
 # 0.06%-dense synthetic B) — see each one's own run_suitesparse_benchmark.py
 # for exact shapes/densities.
 #
+# A third kind, PYTORCH_EXPERIMENTS (currently just pytorch_spgemm) — for
+# each one, this instead runs its compile.sh then its own run_comparison.py
+# once (defaults to a 5000x5000 @ 95% sparsity synthetic CSR x CSC pair;
+# override via PYTORCH_SPGEMM_DIM/PYTORCH_SPGEMM_SPARSITY below), which
+# generates its own synthetic data, compares PyTorch against the compiled
+# scf/Splyce binaries, and appends to its own results CSV — same
+# leave-the-CSV-keep-everything-else-disposable cleanup as the other two
+# kinds. Needs a Python environment with torch/scipy/numpy active on
+# $PATH's python3 first (e.g. activate a venv — see
+# pytorch_spgemm/run_comparison.py), same as how plotting experiments need
+# matplotlib active first (see README).
+#
 # Add new experiment names to ALL_EXPERIMENTS (and their directory in
 # EXPERIMENT_DIR) as they're set up — each synthetic-data experiment needs
 # a compile.sh, a run.sh, and a matching generator in gen_data.c; each
 # real-world-data experiment needs a compile.sh and a
 # run_suitesparse_benchmark.py, and its name added to
-# REALWORLD_EXPERIMENTS below.
+# REALWORLD_EXPERIMENTS below; each PyTorch-comparison experiment needs a
+# compile.sh and a run_comparison.py, and its name added to
+# PYTORCH_EXPERIMENTS below.
 #
 # Usage:
 #   ./run.sh all                  # every experiment in ALL_EXPERIMENTS
@@ -84,6 +98,18 @@
 #       run_suitesparse_*.py script instead of the default single-threaded
 #       run. To pin these to a specific NUMA node/CPU set, wrap the whole
 #       ./run.sh invocation in `numactl ...`.
+#
+#   REALWORLD_MATRIX=name ./run.sh <realworld-experiment>
+#       Passes --matrix "$REALWORLD_MATRIX" to the underlying script, for
+#       ones that support running a single named SuiteSparse matrix instead
+#       of their default job set (spgemm_realworld and the _sweep scripts,
+#       as of when this was added — check the target script's own --help/
+#       usage comment if unsure). Silently unused by scripts that don't
+#       recognize --matrix.
+#
+#   PYTORCH_SPGEMM_DIM=n PYTORCH_SPGEMM_SPARSITY=s ./run.sh pytorch_spgemm
+#       Overrides run_comparison.py's default 5000x5000 @ 95% sparsity
+#       synthetic matrix size/sparsity. Either can be set independently.
 
 set -euo pipefail
 
@@ -128,6 +154,7 @@ declare -A EXPERIMENT_DIR=(
   [spmspv_realworld_sweep]="speedups/real_world_data/spmspv"
   [spmttkrp_realworld_sweep]="speedups/real_world_data/spmttkrp"
   [spmttkrp_frostt]="speedups/real_world_data/spmttkrp"
+  [pytorch_spgemm]="pytorch_spgemm"
 )
 
 # "table2" run.sh target: the five synthetic-data speedup kernels.
@@ -162,6 +189,9 @@ usage() {
   echo "Also available individually: spmttkrp_frostt (real 3D FROSTT tensor" >&2
   echo "for spmttkrp's tensor_B — ~600MB download, see" >&2
   echo "speedups/real_world_data/frostt/download_data.py for available names)" >&2
+  echo "Also available individually: pytorch_spgemm (PyTorch CSR x CSC SpGEMM" >&2
+  echo "vs. scf/Splyce on synthetic data — needs torch/scipy/numpy active on" >&2
+  echo "\$PATH's python3 first; see pytorch_spgemm/run_comparison.py)" >&2
   exit 1
 }
 
@@ -225,6 +255,22 @@ is_realworld() {
   return 1
 }
 
+# Experiment names driven by their own run_comparison.py (compile.sh + that
+# script), comparing PyTorch against the compiled scf/Splyce binaries —
+# distinct from REALWORLD_EXPERIMENTS since there's no SuiteSparse
+# download/lookup involved, just synthetic data generated on the spot.
+PYTORCH_EXPERIMENTS=(
+  pytorch_spgemm
+)
+
+is_pytorch() {
+  local name="$1"
+  for pt in "${PYTORCH_EXPERIMENTS[@]}"; do
+    [[ "$pt" == "$name" ]] && return 0
+  done
+  return 1
+}
+
 # spmttkrp_frostt is FROSTT-based, not SuiteSparse-based — no
 # matrix_metadata.json scrape needed for it.
 is_suitesparse() {
@@ -257,6 +303,7 @@ for experiment in "${EXPERIMENTS[@]}"; do
       script_args+=(--mode multicore)
       [[ -n "${REALWORLD_CORES:-}" ]] && script_args+=(--cores "$REALWORLD_CORES")
     fi
+    [[ -n "${REALWORLD_MATRIX:-}" ]] && script_args+=(--matrix "$REALWORLD_MATRIX")
     echo "[$experiment] Downloading real-world data and running ($script${REALWORLD_MODE:+, mode=$REALWORLD_MODE}) ..."
     ( cd "$exp_dir" && "./$script" "${script_args[@]}" )
 
@@ -267,6 +314,26 @@ for experiment in "${EXPERIMENTS[@]}"; do
     # itself as each job finishes — this only needs to catch anything left
     # behind by a run that was interrupted before its own cleanup ran.
     rm -f "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
+
+    echo "[$experiment] Done. Results in $exp_dir"
+  elif is_pytorch "$experiment"; then
+    echo "[$experiment] Compiling ..."
+    ( cd "$exp_dir" && ./compile.sh )
+
+    # Both positional args must be passed together (run_comparison.py has no
+    # way to take just the second one) — if only one env var is set, fill
+    # the other from run_comparison.py's own default (keep these in sync
+    # with its argparse defaults).
+    comparison_args=()
+    if [[ -n "${PYTORCH_SPGEMM_DIM:-}" || -n "${PYTORCH_SPGEMM_SPARSITY:-}" ]]; then
+      comparison_args+=("${PYTORCH_SPGEMM_DIM:-5000}" "${PYTORCH_SPGEMM_SPARSITY:-0.95}")
+    fi
+
+    echo "[$experiment] Generating data and running (run_comparison.py) ..."
+    ( cd "$exp_dir" && ./run_comparison.py "${comparison_args[@]}" )
+
+    echo "[$experiment] Deleting compiled binaries and tensor data ..."
+    rm -f "$exp_dir"/test_benchmark_* "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
 
     echo "[$experiment] Done. Results in $exp_dir"
   else

@@ -24,6 +24,14 @@
 #
 # Some selected matrices are enormous (multi-billion nnz) — use --matrix,
 # --limit, or a tight --timeout to avoid downloading/running all of them.
+# B and C are both loaded (as CSR/CSC) and kept resident for the whole
+# benchmark loop, alongside the dense output A allocated each iteration
+# (see spgemm_dn.mlir's main()) — so before downloading anything, this
+# estimates the combined peak (B + C + A, computed from matrix_metadata.json
+# alone) and skips the job if it exceeds a memory budget (see
+# MEMORY_SAFETY_FRACTION; override with --memory-limit-gib) — same mechanism
+# ../spmttkrp/run_suitesparse_sweep.py and ../spmttkrp/run_frostt_benchmark.py
+# use.
 #
 # Prerequisite: ./compile.sh has already been run.
 #
@@ -33,6 +41,8 @@
 #   ./run_suitesparse_sweep.py --limit 10        # first 10 (testing)
 #   ./run_suitesparse_sweep.py --timeout 600     # per-binary-run timeout
 #                                                 # in seconds (default 300)
+#   ./run_suitesparse_sweep.py --memory-limit-gib 64   # override the
+#       auto-detected memory budget with a fixed cap
 #   ./run_suitesparse_sweep.py --mode multicore [--cores N]
 #       Runs the OpenMP dense-outer-loop parallel binaries (compile.sh's
 #       *_parallel variants) with OMP_NUM_THREADS=N instead of the
@@ -65,17 +75,41 @@ SPLYCE_BIN_DENSE_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_sply
 BASELINE_BIN_CSR_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_scf_parallel")
 SPLYCE_BIN_CSR_PARALLEL = os.path.join(SCRIPT_DIR, "test_benchmark_spgemm_csr_splyce_phase_001_parallel")
 
-# A is num_rows(M) x num_cols(M); a dense f64 A needs that many * 8 bytes.
-# Past this, the dense-output binaries would fail to allocate A and crash —
-# swap to the CSR-output binaries instead.
-DENSE_OUTPUT_LIMIT_BYTES = 200 * 1024 ** 3  # 200 GiB
-
 SUMMARY_CSV = os.path.join(SCRIPT_DIR, "spgemm_realworld_sweep_results.csv")
 RAW_BACKUP_CSV = os.path.join(SCRIPT_DIR, "spgemm_realworld_sweep_raw_runtimes.csv")
 
 TENSOR_B = os.path.join(SCRIPT_DIR, "tensor_B.tns")
 TENSOR_C = os.path.join(SCRIPT_DIR, "tensor_C.tns")
 BENCHMARK_FILE = os.path.join(SCRIPT_DIR, "benchmark")
+
+# Estimated peak bytes/nonzero once a sparse tensor is loaded by the MLIR
+# sparse tensor runtime, which briefly holds a full COO intermediate
+# alongside the final level-format storage before freeing the COO (see the
+# sparse_tensor reader trace from the FROSTT-loading investigation) —
+# roughly 2x the raw coordinate size: 2D (2 coords + 1 value, 8 bytes each)
+# * 2 = 48 bytes/nnz.
+TENSOR_2D_BYTES_PER_NNZ = 48
+
+# Fraction of total system RAM usable as budget — only one job runs at a
+# time (sequential sweep), so this is a fraction of the *whole machine's*
+# RAM, not divided across jobs; not the full total, to leave headroom for
+# the OS, page cache, the Python driver itself, and the fact that the
+# per-nonzero estimate above is approximate, not exact.
+MEMORY_SAFETY_FRACTION = 0.5
+
+
+def detect_total_memory_bytes():
+    # Linux-specific (/proc/meminfo) — falls back to a conservative 32 GiB
+    # if unreadable, so a detection failure fails toward skipping too much
+    # rather than too little.
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024  # value is in KiB
+    except (OSError, ValueError):
+        pass
+    return 32 * 1024 ** 3
 
 
 def median_excl_first(times):
@@ -156,6 +190,7 @@ def main():
     matrix_name = None
     mode = "single"
     cores = None
+    memory_limit_gib = None
     if "--limit" in args:
         limit = int(args[args.index("--limit") + 1])
     if "--timeout" in args:
@@ -166,6 +201,16 @@ def main():
         mode = args[args.index("--mode") + 1]
     if "--cores" in args:
         cores = int(args[args.index("--cores") + 1])
+    if "--memory-limit-gib" in args:
+        memory_limit_gib = float(args[args.index("--memory-limit-gib") + 1])
+
+    memory_budget_bytes = (
+        int(memory_limit_gib * 1024 ** 3) if memory_limit_gib is not None
+        else int(detect_total_memory_bytes() * MEMORY_SAFETY_FRACTION)
+    )
+    print(f"Memory budget per job: {memory_budget_bytes / 1024**3:.1f} GiB"
+          + (" (explicit)" if memory_limit_gib is not None else
+             f" ({MEMORY_SAFETY_FRACTION:.0%} of detected total RAM)"))
 
     if mode not in ("single", "multicore"):
         sys.exit(f"error: unsupported --mode '{mode}' (supported: single, multicore)")
@@ -225,10 +270,20 @@ def main():
             try:
                 rows, cols, nnz = entry["num_rows"], entry["num_cols"], entry["nnz"]
 
-                dense_bytes = rows * cols * 8
-                if dense_bytes > DENSE_OUTPUT_LIMIT_BYTES:
-                    print(f"  [skip] dense output would be {dense_bytes / 1024**3:.1f} GiB "
-                          f"(> {DENSE_OUTPUT_LIMIT_BYTES / 1024**3:.0f} GiB) — skipping {name}")
+                # B and C are both M (same nnz), loaded as CSR/CSC and kept
+                # resident for the whole benchmark loop, alongside the dense
+                # output A allocated each iteration (see spgemm_dn.mlir's
+                # main()) — estimate the combined peak before downloading.
+                tensor_b_bytes = nnz * TENSOR_2D_BYTES_PER_NNZ
+                tensor_c_bytes = nnz * TENSOR_2D_BYTES_PER_NNZ
+                dense_a_bytes = rows * cols * 8
+                estimated_peak_bytes = tensor_b_bytes + tensor_c_bytes + dense_a_bytes
+
+                if estimated_peak_bytes > memory_budget_bytes:
+                    print(f"  [skip] estimated peak memory {estimated_peak_bytes / 1024**3:.1f} GiB "
+                          f"(B={tensor_b_bytes / 1024**3:.1f} C={tensor_c_bytes / 1024**3:.1f} "
+                          f"A={dense_a_bytes / 1024**3:.1f} GiB) "
+                          f"> budget {memory_budget_bytes / 1024**3:.1f} GiB — skipping {name}")
                     continue
                 m_tns, downloaded_dir = download_matrix(name, entry)
                 if m_tns is None:

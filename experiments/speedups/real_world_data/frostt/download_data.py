@@ -8,11 +8,16 @@
 # way the SuiteSparse Matrix Collection's ssstats.csv does, so each tensor
 # this repo knows about is hardcoded below by name.
 #
-# Each FROSTT .tns.gz is actually a gzipped *tar* archive (not a plain
-# gzipped text file) that also carries a macOS "AppleDouble" resource-fork
-# entry (a second, junk "._<name>.tns" member alongside the real one) —
-# both are true of 1998DARPA.tns.gz at least, so this assumes it's true of
-# any future entry added here too, and extracts only the real member.
+# Each FROSTT .tns.gz might be a gzipped *tar* archive (not a plain gzipped
+# text file) that also carries a macOS "AppleDouble" resource-fork entry (a
+# second, junk "._<name>.tns" member alongside the real one) — both are
+# true of 1998DARPA.tns.gz — or it might just be the raw .tns data,
+# plain-gzipped with no tar wrapper at all (true of amazon-reviews.tns.gz,
+# confirmed via `file` on a partial download: "gzip compressed data, was
+# 'amazon-reviews.tns'" — no tar magic). download_and_extract() tries the
+# tar path first and falls back to plain gzip if that's not what the
+# archive actually is, so either format works without needing to know
+# which one a given entry is ahead of time.
 #
 # The raw member has no header at all (unlike this repo's own .tns
 # convention) — just whitespace-separated "<idx1> ... <idxN> <val>" rows,
@@ -25,6 +30,7 @@
 #                                            # frostt/<name>/ already exists
 #   ./download_data.py --list               # print known tensor names
 
+import gzip
 import os
 import sys
 import tarfile
@@ -38,6 +44,30 @@ FROSTT_TENSORS = {
     "darpa": (
         "https://frostt-tensors.s3.us-east-2.amazonaws.com/1998DARPA/1998darpa.tns.gz",
         "1998DARPA.tns",
+    ),
+    "amazon_reviews": (
+        "https://s3.us-east-2.amazonaws.com/frostt/frostt_data/amazon/amazon-reviews.tns.gz",
+        "amazon_reviews.tns",
+    ),
+    "free_base": (
+        "https://frostt-tensors.s3.us-east-2.amazonaws.com/FB-M/fb-m.tns.gz",
+        "fbm.tns",
+    ),
+    "nell1" : (
+        "https://s3.us-east-2.amazonaws.com/frostt/frostt_data/nell/nell-1.tns.gz",
+        "nell1.tns",
+    ),
+    "nell2" : (
+        "https://s3.us-east-2.amazonaws.com/frostt/frostt_data/nell/nell-2.tns.gz",
+        "nell2.tns",
+    ),
+    "patents" : (
+        "https://s3.us-east-2.amazonaws.com/frostt/frostt_data/patents/patents.tns.gz",
+        "patents.tns",
+    ),
+    "reddit" : (
+        "https://s3.us-east-2.amazonaws.com/frostt/frostt_data/reddit-2015/reddit-2015.tns.gz",
+        "reddit2015.tns",
     ),
 }
 
@@ -82,15 +112,29 @@ def download_and_extract(name, force=False):
 
     print(f"[extract] {name}: {member} -> {dest_path}")
     try:
-        with tarfile.open(archive_path, mode="r:gz") as tf:
-            try:
-                src = tf.extractfile(member)
-            except KeyError:
-                sys.exit(f"[error] {name}: expected member '{member}' not found in archive "
-                          f"(archive contains: {tf.getnames()})")
-            if src is None:
-                sys.exit(f"[error] {name}: '{member}' is not a regular file in the archive")
-            with open(dest_path, "wb") as out:
+        try:
+            with tarfile.open(archive_path, mode="r:gz") as tf:
+                try:
+                    src = tf.extractfile(member)
+                except KeyError:
+                    sys.exit(f"[error] {name}: expected member '{member}' not found in archive "
+                              f"(archive contains: {tf.getnames()})")
+                if src is None:
+                    sys.exit(f"[error] {name}: '{member}' is not a regular file in the archive")
+                with open(dest_path, "wb") as out:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+        except tarfile.ReadError:
+            # Not a gzipped tar after all — some FROSTT archives (e.g.
+            # amazon-reviews.tns.gz) are just the raw .tns data,
+            # plain-gzipped with no tar wrapper. `member` doesn't apply
+            # here (there's no tar structure to look a name up in) — the
+            # whole decompressed stream is the file.
+            print(f"[extract] {name}: not a tar archive — treating as plain gzip")
+            with gzip.open(archive_path, "rb") as src, open(dest_path, "wb") as out:
                 while True:
                     chunk = src.read(1024 * 1024)
                     if not chunk:

@@ -42,10 +42,26 @@
 # map (skipping ones already recorded, per already_recorded()), so adding a
 # new tensor there is enough to have the next run pick it up.
 #
+# spmttkrp_dn.mlir's main() keeps B, C, D, AND the dense output A all
+# simultaneously resident for the whole benchmark loop (none of B/C/D are
+# freed until after it finishes), and FROSTT tensors can be huge — so
+# before generating C/D or running anything, this estimates the combined
+# peak (B + C + D + A) and skips the tensor if it exceeds a memory budget
+# (see MEMORY_SAFETY_FRACTION; override with --memory-limit-gib). Unlike
+# run_suitesparse_sweep.py's equivalent guard (same directory), this can't
+# check *before* downloading — FROSTT publishes no
+# advance size metadata (see download_data.py's module docstring), so
+# tensor_B's real shape/nnz are only known after it's already been
+# downloaded and converted. The check still guards the actually
+# memory-heavy steps (C/D generation, and running the binaries), just not
+# the download bandwidth for an oversized tensor.
+#
 # Usage:
 #   ./run_frostt_benchmark.py
 #   ./run_frostt_benchmark.py --timeout 600        # per-binary-run timeout
 #                                                   # in seconds (default 300)
+#   ./run_frostt_benchmark.py --memory-limit-gib 64   # override the
+#       auto-detected memory budget with a fixed cap
 #   ./run_frostt_benchmark.py --mode multicore [--cores N]
 #       Runs the OpenMP dense-outer-loop parallel binaries (compile.sh's
 #       *_parallel variants) with OMP_NUM_THREADS=N instead of the
@@ -83,7 +99,48 @@ TENSOR_C = os.path.join(SCRIPT_DIR, "tensor_C.tns")
 TENSOR_D = os.path.join(SCRIPT_DIR, "tensor_D.tns")
 BENCHMARK_FILE = os.path.join(SCRIPT_DIR, "benchmark")
 
-MIN_DENSITY = 0.001 / 100  # 0.001% floor, for when B's own density is ~0
+MIN_DENSITY = 0.1 / 100  # 0.1% floor, for when B's own density is ~0
+
+# Estimated peak bytes/nonzero once a sparse tensor is loaded by the MLIR
+# sparse tensor runtime, which briefly holds a full COO intermediate
+# alongside the final level-format storage before freeing the COO (see the
+# sparse_tensor reader trace from the earlier FROSTT-loading investigation)
+# — roughly 2x the raw coordinate size:
+#   tensor_B, 3D (3 coords + 1 value, 8 bytes each) * 2   = 64 bytes/nnz
+#   tensor_C/D, 2D (2 coords + 1 value, 8 bytes each) * 2 = 48 bytes/nnz
+TENSOR_B_BYTES_PER_NNZ = 64
+TENSOR_2D_BYTES_PER_NNZ = 48
+
+# Fraction of *currently available* (not total) memory usable as budget —
+# available already accounts for what's in use by other processes and for
+# reclaimable page cache, so an aggressive fraction of it is safe to spend
+# without the same risk an aggressive fraction of total RAM would carry on
+# a machine already under memory pressure. FROSTT tensors are often huge,
+# so this deliberately runs hotter than the SuiteSparse sweep's 50%-of-total
+# — the goal here is using as much of what's actually free as safely
+# possible, not leaving half the machine idle by default.
+MEMORY_SAFETY_FRACTION = 0.85
+
+
+def detect_available_memory_bytes():
+    # Linux-specific (/proc/meminfo). Falls back to half of MemTotal if
+    # MemAvailable specifically is missing (pre-3.14 kernels), then to a
+    # conservative 16 GiB if /proc/meminfo itself is unreadable — a
+    # detection failure fails toward skipping too much, not too little.
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                if key in ("MemAvailable", "MemTotal"):
+                    info[key] = int(rest.split()[0]) * 1024  # value is in KiB
+        if "MemAvailable" in info:
+            return info["MemAvailable"]
+        if "MemTotal" in info:
+            return info["MemTotal"] // 2
+    except (OSError, ValueError):
+        pass
+    return 16 * 1024 ** 3
 
 
 def generate_2d_tensor(path, rows, cols, density):
@@ -142,7 +199,7 @@ def already_recorded():
         return {(row["dataset"], row.get("mode", "single")) for row in csv.DictReader(f)}
 
 
-def process_tensor(tensor_name, timeout, mode, cores, summary_writer, raw_writer, sf, rf):
+def process_tensor(tensor_name, timeout, mode, cores, memory_budget_bytes, summary_writer, raw_writer, sf, rf):
     print(f"=== {tensor_name} ===")
     downloaded_dir = os.path.join(FROSTT_DIR, tensor_name)
 
@@ -157,6 +214,46 @@ def process_tensor(tensor_name, timeout, mode, cores, summary_writer, raw_writer
 
         c_rows, c_cols = dim3, dim1
         d_rows, d_cols = dim2, dim1
+
+        # B, C, D, and dense output A are all simultaneously resident (see
+        # module docstring) — estimate the combined peak before generating
+        # C/D or running anything. b_nnz is exact (just measured from the
+        # real download); expected C/D nnz are estimated from their target
+        # density, same as generate_2d_tensor will actually produce.
+        tensor_b_bytes = b_nnz * TENSOR_B_BYTES_PER_NNZ
+        expected_c_nnz = target_density * (c_rows * c_cols)
+        expected_d_nnz = target_density * (d_rows * d_cols)
+        tensor_c_bytes = expected_c_nnz * TENSOR_2D_BYTES_PER_NNZ
+        tensor_d_bytes = expected_d_nnz * TENSOR_2D_BYTES_PER_NNZ
+        dense_a_bytes = dim1 * dim2 * 8
+        estimated_peak_bytes = tensor_b_bytes + tensor_c_bytes + tensor_d_bytes + dense_a_bytes
+
+        if estimated_peak_bytes > memory_budget_bytes:
+            print(f"  [skip] estimated peak memory {estimated_peak_bytes / 1024**3:.1f} GiB "
+                  f"(B={tensor_b_bytes / 1024**3:.1f} C={tensor_c_bytes / 1024**3:.1f} "
+                  f"D={tensor_d_bytes / 1024**3:.1f} A={dense_a_bytes / 1024**3:.1f} GiB) "
+                  f"> budget {memory_budget_bytes / 1024**3:.1f} GiB — skipping {tensor_name} "
+                  f"(download already completed — FROSTT has no advance size metadata to "
+                  f"check before downloading)")
+            # Record this as an NA row instead of just skipping silently —
+            # already_recorded() only sees a tensor as done once it has a
+            # row here, so without this, every future run would re-download
+            # and re-convert this same (potentially many-GB) tensor only to
+            # hit the same memory limit again. plot_results.py-style scripts
+            # already treat a non-numeric scf/splyce time as "no comparison
+            # available" (excluded from the chart, reported separately) —
+            # same handling the splyce-timeout path below relies on via its
+            # own "SKIPPED" value, so NA fits the same convention.
+            summary_writer.writerow([
+                tensor_name, f"{dim1}x{dim2}x{dim3}", b_nnz,
+                f"{c_rows}x{c_cols}", "NA", "NA",
+                f"{d_rows}x{d_cols}", "NA", "NA",
+                mode, cores or "",
+                "NA", "NA",
+            ])
+            sf.flush()
+            return
+
         c_nnz, c_density = generate_2d_tensor(TENSOR_C, c_rows, c_cols, target_density)
         d_nnz, d_density = generate_2d_tensor(TENSOR_D, d_rows, d_cols, target_density)
         print(f"  [tensor_C] shape=({c_rows},{c_cols}) nnz={c_nnz} density={c_density:.6g}")
@@ -212,12 +309,15 @@ def main():
     timeout = 300
     mode = "single"
     cores = None
+    memory_limit_gib = None
     if "--timeout" in args:
         timeout = int(args[args.index("--timeout") + 1])
     if "--mode" in args:
         mode = args[args.index("--mode") + 1]
     if "--cores" in args:
         cores = int(args[args.index("--cores") + 1])
+    if "--memory-limit-gib" in args:
+        memory_limit_gib = float(args[args.index("--memory-limit-gib") + 1])
 
     if mode not in ("single", "multicore"):
         sys.exit(f"error: unsupported --mode '{mode}' (supported: single, multicore)")
@@ -225,6 +325,14 @@ def main():
         sys.exit("error: --cores is only meaningful with --mode multicore")
     if mode == "multicore" and cores is None:
         cores = os.cpu_count()
+
+    memory_budget_bytes = (
+        int(memory_limit_gib * 1024 ** 3) if memory_limit_gib is not None
+        else int(detect_available_memory_bytes() * MEMORY_SAFETY_FRACTION)
+    )
+    print(f"Memory budget per tensor: {memory_budget_bytes / 1024**3:.1f} GiB"
+          + (" (explicit)" if memory_limit_gib is not None else
+             f" ({MEMORY_SAFETY_FRACTION:.0%} of currently available RAM)"))
 
     baseline_bin = BASELINE_BIN_PARALLEL if mode == "multicore" else BASELINE_BIN
     splyce_bin = SPLYCE_BIN_PARALLEL if mode == "multicore" else SPLYCE_BIN
@@ -254,7 +362,8 @@ def main():
             raw_writer.writerow(["dataset", "config", "iteration", "time_s"])
 
         for tensor_name in pending:
-            process_tensor(tensor_name, timeout, mode, cores, summary_writer, raw_writer, sf, rf)
+            process_tensor(tensor_name, timeout, mode, cores, memory_budget_bytes,
+                            summary_writer, raw_writer, sf, rf)
 
     print(f"Done. Summary: {SUMMARY_CSV}")
     print(f"Raw backup: {RAW_BACKUP_CSV}")

@@ -147,16 +147,11 @@ export PATH=$LLVM_INSTALL/bin:$PATH
 
 ### Step 2: Build Splyce Pass
 
-`$LLVM_INSTALL` here is the same one exported in Step 1 (Option A or B) - it's what points `MLIR_DIR`/`LLVM_DIR` at your built/installed LLVM. Also set `--gcc-install-dir` below to the same GCC install you built LLVM's runtimes against earlier, so Splyce links against matching C++ standard library headers/libs.
+`$LLVM_INSTALL` here is the same one exported in Step 1 (Option A or B) - `CMakeLists.txt` derives `MLIR_DIR`/`LLVM_DIR` from it automatically, so you don't need to pass either explicitly unless you want to point at a *different* LLVM install than `$LLVM_INSTALL` (pass `-DMLIR_DIR=... -DLLVM_DIR=...` to override). `CMakeLists.txt` also defaults to `clang`/`clang++` (unless you pass `-DCMAKE_C_COMPILER=`/`-DCMAKE_CXX_COMPILER=`, or have `CC`/`CXX` set) and to a `Release` build (unless you pass `-DCMAKE_BUILD_TYPE=...`). Also set `--gcc-install-dir` below to the same GCC install you built LLVM's runtimes against earlier, so Splyce links against matching C++ standard library headers/libs.
 
 ```bash
 cd /path/to/splyce
 cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir \
-  -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm \
   -DCMAKE_C_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13" \
   -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"
 

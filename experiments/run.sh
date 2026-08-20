@@ -56,26 +56,41 @@
 # 0.06%-dense synthetic B) — see each one's own run_suitesparse_benchmark.py
 # for exact shapes/densities.
 #
-# A third kind, PYTORCH_EXPERIMENTS (currently just pytorch_spgemm) — for
-# each one, this instead runs its compile.sh then its own run_comparison.py
-# once (defaults to a 5000x5000 @ 95% sparsity synthetic CSR x CSC pair;
-# override via PYTORCH_SPGEMM_DIM/PYTORCH_SPGEMM_SPARSITY below), which
-# generates its own synthetic data, compares PyTorch against the compiled
-# scf/Splyce binaries, and appends to its own results CSV — same
-# leave-the-CSV-keep-everything-else-disposable cleanup as the other two
-# kinds. Needs a Python environment with torch/scipy/numpy active on
-# $PATH's python3 first (e.g. activate a venv — see
-# pytorch_spgemm/run_comparison.py), same as how plotting experiments need
-# matplotlib active first (see README).
+# A third kind, CLUSTERING_EXPERIMENTS (experiments/clustering/<kernel>/) —
+# for each one, this instead:
+#   1. Compiles it (<experiment>/compile.sh), which lowers/translates/
+#      compiles that kernel's already-Splyce-vectorized
+#      <kernel>_splyce_scf.mlir (not sparsification/vectorization from
+#      scratch, unlike the real-world-data kernels above) into a single
+#      binary named exactly the kernel (e.g. ./spgemm, not
+#      test_benchmark_*), which — unlike the other two kinds — also prints
+#      "Scalar elements processed"/"SIMD elements processed" (Splyce
+#      fast-lane vs. scalar-epilogue coiteration counts) alongside its
+#      timing, since that per-run breakdown is the point of this
+#      experiment category.
+#   2. Runs its curated benchmark (<experiment>/run_suitesparse_benchmark.py),
+#      which downloads/generates the JOBS (or DATASETS) it needs, runs the
+#      compiled binary once per job (not scf-baseline-vs-Splyce — there's
+#      no baseline binary here), appends to its own
+#      <kernel>_clustering_results.csv, and already deletes its own
+#      tensor_*.tns/benchmark and the downloaded suitesparse/<name>/
+#      director(y/ies) internally once it's done.
+#   3. Deletes the compiled binary and the two intermediate files
+#      compile.sh leaves behind (<kernel>_llvm.mlir, <kernel>_splyce.ll —
+#      unlike the real-world-data kernels' compile.sh, this one doesn't
+#      clean those up itself).
+#   Before the first such experiment, this also runs
+#   suitesparse/scrape_metadata.py once if matrix_metadata.json doesn't
+#   exist yet, same as the real-world-data kernels above.
 #
 # Add new experiment names to ALL_EXPERIMENTS (and their directory in
 # EXPERIMENT_DIR) as they're set up — each synthetic-data experiment needs
 # a compile.sh, a run.sh, and a matching generator in gen_data.c; each
 # real-world-data experiment needs a compile.sh and a
 # run_suitesparse_benchmark.py, and its name added to
-# REALWORLD_EXPERIMENTS below; each PyTorch-comparison experiment needs a
-# compile.sh and a run_comparison.py, and its name added to
-# PYTORCH_EXPERIMENTS below.
+# REALWORLD_EXPERIMENTS below; each clustering experiment needs a
+# compile.sh and a run_suitesparse_benchmark.py, and its name added to
+# CLUSTERING_EXPERIMENTS below.
 #
 # Usage:
 #   ./run.sh all                  # every experiment in ALL_EXPERIMENTS
@@ -88,6 +103,8 @@
 #                                   # (speedups/real_world_data/print_
 #                                   # realworld_summary.py) once all 5 have
 #                                   # finished
+#   ./run.sh clustering             # the 5 clustering/<kernel> experiments
+#                                   # (not part of "all" — see usage())
 #   ./run.sh <experiment> [...]    # one or more individual experiments by name
 #                                   # (e.g. ./run.sh phase_ablation, or
 #                                   # ./run.sh spgemm_speedup spmspv_speedup)
@@ -106,10 +123,6 @@
 #       as of when this was added — check the target script's own --help/
 #       usage comment if unsure). Silently unused by scripts that don't
 #       recognize --matrix.
-#
-#   PYTORCH_SPGEMM_DIM=n PYTORCH_SPGEMM_SPARSITY=s ./run.sh pytorch_spgemm
-#       Overrides run_comparison.py's default 5000x5000 @ 95% sparsity
-#       synthetic matrix size/sparsity. Either can be set independently.
 
 set -euo pipefail
 
@@ -154,7 +167,11 @@ declare -A EXPERIMENT_DIR=(
   [spmspv_realworld_sweep]="speedups/real_world_data/spmspv"
   [spmttkrp_realworld_sweep]="speedups/real_world_data/spmttkrp"
   [spmttkrp_frostt]="speedups/real_world_data/spmttkrp"
-  [pytorch_spgemm]="pytorch_spgemm"
+  [spgemm_clustering]="clustering/spgemm"
+  [spmmh_clustering]="clustering/spmmh"
+  [spmspv_clustering]="clustering/spmspv"
+  [spmttkrp_clustering]="clustering/spmttkrp"
+  [spttspm_clustering]="clustering/spttspm"
 )
 
 # "table2" run.sh target: the five synthetic-data speedup kernels.
@@ -175,11 +192,21 @@ REALDATA_EXPERIMENTS=(
   spttspm_realworld
 )
 
+# "clustering" run.sh target: the five clustering/<kernel> experiments.
+CLUSTERING_EXPERIMENTS=(
+  spgemm_clustering
+  spmspv_clustering
+  spmttkrp_clustering
+  spmmh_clustering
+  spttspm_clustering
+)
+
 usage() {
-  echo "Usage: $0 all|table2|realdata|<experiment> [<experiment> ...]" >&2
+  echo "Usage: $0 all|table2|realdata|clustering|<experiment> [<experiment> ...]" >&2
   echo "  all                 - run every experiment" >&2
   echo "  table2              - run ${TABLE2_EXPERIMENTS[*]}" >&2
   echo "  realdata            - run ${REALDATA_EXPERIMENTS[*]}" >&2
+  echo "  clustering          - run ${CLUSTERING_EXPERIMENTS[*]} (not part of 'all')" >&2
   echo "  <experiment> [...]  - run one or more individual experiments by name" >&2
   echo "Available experiments: ${ALL_EXPERIMENTS[*]}" >&2
   echo "Also available individually (not in 'all'/'realdata' — spans ~169" >&2
@@ -189,9 +216,9 @@ usage() {
   echo "Also available individually: spmttkrp_frostt (real 3D FROSTT tensor" >&2
   echo "for spmttkrp's tensor_B — ~600MB download, see" >&2
   echo "speedups/real_world_data/frostt/download_data.py for available names)" >&2
-  echo "Also available individually: pytorch_spgemm (PyTorch CSR x CSC SpGEMM" >&2
-  echo "vs. scf/Splyce on synthetic data — needs torch/scipy/numpy active on" >&2
-  echo "\$PATH's python3 first; see pytorch_spgemm/run_comparison.py)" >&2
+  echo "Also available individually or via 'clustering': ${CLUSTERING_EXPERIMENTS[*]}" >&2
+  echo "  (per-run SIMD-fastlane/scalar-epilogue coiteration counts — see" >&2
+  echo "  clustering/<kernel>/run_suitesparse_benchmark.py)" >&2
   exit 1
 }
 
@@ -210,6 +237,9 @@ case "$1" in
     ;;
   realdata)
     EXPERIMENTS=("${REALDATA_EXPERIMENTS[@]}")
+    ;;
+  clustering)
+    EXPERIMENTS=("${CLUSTERING_EXPERIMENTS[@]}")
     ;;
   *)
     EXPERIMENTS=("$@")
@@ -255,27 +285,20 @@ is_realworld() {
   return 1
 }
 
-# Experiment names driven by their own run_comparison.py (compile.sh + that
-# script), comparing PyTorch against the compiled scf/Splyce binaries —
-# distinct from REALWORLD_EXPERIMENTS since there's no SuiteSparse
-# download/lookup involved, just synthetic data generated on the spot.
-PYTORCH_EXPERIMENTS=(
-  pytorch_spgemm
-)
-
-is_pytorch() {
+is_clustering() {
   local name="$1"
-  for pt in "${PYTORCH_EXPERIMENTS[@]}"; do
-    [[ "$pt" == "$name" ]] && return 0
+  for cl in "${CLUSTERING_EXPERIMENTS[@]}"; do
+    [[ "$cl" == "$name" ]] && return 0
   done
   return 1
 }
 
 # spmttkrp_frostt is FROSTT-based, not SuiteSparse-based — no
-# matrix_metadata.json scrape needed for it.
+# matrix_metadata.json scrape needed for it. Clustering experiments are
+# all SuiteSparse-based too.
 is_suitesparse() {
   local name="$1"
-  is_realworld "$name" && [[ "$name" != "spmttkrp_frostt" ]]
+  { is_realworld "$name" && [[ "$name" != "spmttkrp_frostt" ]]; } || is_clustering "$name"
 }
 
 SUITESPARSE_DIR="$SCRIPT_DIR/speedups/real_world_data/suitesparse"
@@ -316,24 +339,28 @@ for experiment in "${EXPERIMENTS[@]}"; do
     rm -f "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
 
     echo "[$experiment] Done. Results in $exp_dir"
-  elif is_pytorch "$experiment"; then
+  elif is_clustering "$experiment"; then
+    if [[ ! -f "$SUITESPARSE_METADATA" ]]; then
+      echo "[$experiment] matrix_metadata.json not found — scraping SuiteSparse metadata (one-time) ..."
+      ( cd "$SUITESPARSE_DIR" && ./scrape_metadata.py )
+    fi
+
     echo "[$experiment] Compiling ..."
     ( cd "$exp_dir" && ./compile.sh )
 
-    # Both positional args must be passed together (run_comparison.py has no
-    # way to take just the second one) — if only one env var is set, fill
-    # the other from run_comparison.py's own default (keep these in sync
-    # with its argparse defaults).
-    comparison_args=()
-    if [[ -n "${PYTORCH_SPGEMM_DIM:-}" || -n "${PYTORCH_SPGEMM_SPARSITY:-}" ]]; then
-      comparison_args+=("${PYTORCH_SPGEMM_DIM:-5000}" "${PYTORCH_SPGEMM_SPARSITY:-0.95}")
-    fi
+    echo "[$experiment] Downloading real-world data and running (run_suitesparse_benchmark.py) ..."
+    ( cd "$exp_dir" && ./run_suitesparse_benchmark.py )
 
-    echo "[$experiment] Generating data and running (run_comparison.py) ..."
-    ( cd "$exp_dir" && ./run_comparison.py "${comparison_args[@]}" )
-
-    echo "[$experiment] Deleting compiled binaries and tensor data ..."
-    rm -f "$exp_dir"/test_benchmark_* "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
+    # Binary is named exactly the kernel (e.g. ./spgemm), not
+    # test_benchmark_* — derive it from the directory name.
+    kernel="$(basename "$exp_dir")"
+    echo "[$experiment] Deleting compiled binary and intermediate files ..."
+    rm -f "$exp_dir/$kernel" "$exp_dir/${kernel}_llvm.mlir" "$exp_dir/${kernel}_splyce.ll"
+    # tensor_*.tns and benchmark are already deleted by
+    # run_suitesparse_benchmark.py itself as each job finishes — this only
+    # needs to catch anything left behind by a run that was interrupted
+    # before its own cleanup ran.
+    rm -f "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
 
     echo "[$experiment] Done. Results in $exp_dir"
   else

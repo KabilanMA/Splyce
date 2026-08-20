@@ -125,7 +125,7 @@ def plot(datasets, speedups, formats, densities, excluded, sort_by, out_path):
     # not the string length — that's what makes packing this tight
     # possible at all without adjacent labels colliding.
     fig_width = max(3.2, 0.155 * n + 0.9)
-    fig, ax = plt.subplots(figsize=(fig_width, 5.0), dpi=300,
+    fig, ax = plt.subplots(figsize=(fig_width, 6.0), dpi=300,
                             layout="constrained")
     # ax.set_facecolor(COLOR_SURFACE)
 
@@ -139,9 +139,9 @@ def plot(datasets, speedups, formats, densities, excluded, sort_by, out_path):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, color=COLOR_INK_MUTED, fontsize=6.5,
                         rotation=90, ha="center", va="top")
-    ax.set_xlabel("Dataset", color=COLOR_INK_PRIMARY, fontsize=10)
+    ax.set_xlabel("Dataset", color=COLOR_INK_PRIMARY, fontsize=18)
     ax.set_ylabel("Speedup",
-                  color=COLOR_INK_PRIMARY, fontsize=10)
+                  color=COLOR_INK_PRIMARY, fontsize=18)
 
     # No grid — the 1x dashed line above is the only horizontal reference.
     # Spine zorder raised above the bars' (3) so the axis line draws on top
@@ -152,7 +152,8 @@ def plot(datasets, speedups, formats, densities, excluded, sort_by, out_path):
     ax.spines["bottom"].set_color(COLOR_INK_MUTED)
     ax.spines["left"].set_zorder(6)
     ax.spines["bottom"].set_zorder(10)
-    ax.tick_params(axis="both", length=3, colors=COLOR_INK_MUTED, labelsize=8)
+    ax.tick_params(axis="x", length=3, colors=COLOR_INK_MUTED, labelsize=8)
+    ax.tick_params(axis="y", length=3, colors=COLOR_INK_MUTED, labelsize=11)
     ax.set_xlim(-0.5, n - 0.5)
 
     # Bars all grow from 0, so the tip is always the bar's top edge —
@@ -184,7 +185,7 @@ def plot(datasets, speedups, formats, densities, excluded, sort_by, out_path):
         plt.Rectangle((0, 0), 1, 1, color=COLOR_SLOWER),
     ]
     ax.legend(handles, ["Faster than baseline (≥ 1×)", "Slower than baseline (< 1×)"],
-              loc="upper right", frameon=False, fontsize=8, labelcolor=COLOR_INK_SECONDARY)
+              loc="upper right", frameon=False, fontsize=17, labelcolor=COLOR_INK_SECONDARY)
 
     fig.savefig(out_path)
     print(f"Wrote {out_path}  ({n} datasets plotted, geomean speedup {geomean:.2f}×)")

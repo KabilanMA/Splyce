@@ -133,6 +133,9 @@ FREE_DIM = 1000
 # SuiteSparse source).
 JOBS = [
     {"name": "heart1", "c": None, "d": "heart1"},
+    {"name": "CAG_mat364", "c": "CAG_mat364", "d": "CAG_mat364"},
+    {"name": "struct4", "c": None, "d": "struct4"},
+    {"name": "cavity26", "c": None, "d": "cavity26"},
 ]
 
 # Estimated peak bytes/nonzero once a sparse tensor is loaded by the MLIR

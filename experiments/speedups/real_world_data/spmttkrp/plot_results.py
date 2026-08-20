@@ -136,8 +136,8 @@ def plot(datasets, speedups, densities, excluded, sort_by, out_path):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, color=COLOR_INK_MUTED, fontsize=6.5,
                         rotation=90, ha="center", va="top")
-    ax.set_xlabel("Dataset", color=COLOR_INK_PRIMARY, fontsize=10)
-    ax.set_ylabel("Speedup", color=COLOR_INK_PRIMARY, fontsize=10)
+    ax.set_xlabel("Dataset", color=COLOR_INK_PRIMARY, fontsize=9.5)
+    ax.set_ylabel("Speedup", color=COLOR_INK_PRIMARY, fontsize=9.5)
 
     # No grid — the 1x dashed line above is the only horizontal reference.
     # Spine zorder raised above the bars' (3) so the axis line draws on top
@@ -168,8 +168,8 @@ def plot(datasets, speedups, densities, excluded, sort_by, out_path):
             ax.text(float(x[idx]), speedups[idx] + offset, f"{speedups[idx]:.2f}×",
                      va="bottom", ha="center", color=COLOR_INK_PRIMARY, fontsize=6.5, rotation=90)
 
-    ax.set_title(f"n={n} datasets · geometric mean speedup: {geomean:.2f}×",
-                 loc="left", color=COLOR_INK_SECONDARY, fontsize=9.5, pad=10)
+    # ax.set_title(f"n={n} datasets · geometric mean speedup: {geomean:.2f}×",
+    #              loc="left", color=COLOR_INK_SECONDARY, fontsize=9.5, pad=10)
 
     handles = [
         plt.Rectangle((0, 0), 1, 1, color=COLOR_FASTER),

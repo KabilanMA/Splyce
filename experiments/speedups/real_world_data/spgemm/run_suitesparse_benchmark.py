@@ -158,7 +158,7 @@ SYNTHETIC_C_DENSITY_PCT = 9.37
 # generated synthetically instead of downloaded (see main()).
 JOBS = [
     {"name": "internet", "b": "internet", "c": "internet"},
-    {"name": "Trefethen_300", "b": "Trefethen_300", "c": "Trefethen_300"},
+    {"name": "exdata_1", "b": "exdata_1", "c": "exdata_1"},
     {"name": "heart1", "b": "heart1", "c": "heart1"},
     {"name": "c8_mat11", "b": "c8_mat11", "c": None},
 ]

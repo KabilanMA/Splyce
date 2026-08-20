@@ -1,0 +1,69 @@
+{
+    "@context": "https://w3id.org/ro/crate/1.1/context",
+    "@graph": [
+        {
+            "@id": "./",
+            "@type": "Dataset",
+            "actionApplication": [
+                {
+                    "@id": "#ChameleonJupyterLab"
+                }
+            ],
+            "author": [
+                {
+                    "@id": "#author_0"
+                },
+                {
+                    "@id": "#author_1"
+                },
+                {
+                    "@id": "#author_2"
+                }
+            ],
+            "datePublished": "2026-08-20T22:32:43+00:00",
+            "description": "This artifact reproduces the results of the PACT 2026 paper Splyce: SIMD Vectorization of Sparse Coiteration. Sparse tensor contractions are bottlenecked by coiteration loops that resist standard loop vectorization; Splyce is an auto-vectorization framework in MLIR that overcomes this through a dual-path execution model. By decoupling coordinate intersection from pointer management via selective predication, Splyce eliminates data-dependent branches as a side effect, allowing modern superscalar engines to maximize instruction-level parallelism and hide memory latency. Beyond simple branch elimination, the transformation enables high-throughput speculative execution by saturating parallel functional units previously starved by sequential dependencies. Evaluation across foundational sparse tensor kernels demonstrates performance ranging from 1.94x to 2.86x on synthetic inputs, with consistent speedups sustained across a vast majority of irregular real-world datasets from the SuiteSparse collection. By converting unpredictable control flow into a predictable data stream, compiler-driven speculation can effectively reconcile the memory efficiency of compressed storage with the massive execution-unit throughput of modern superscalar architectures. This artifact builds the specific LLVM/MLIR version used by Splyce, builds the Splyce tool, and reproduces the paper's comparisons across the datasets and experiments presented. Hardware requirements: AVX-512 support and at least 32 physical cores within a single socket (the paper's experiments used an Intel Xeon Gold 6430 with 64 physical cores across two sockets); the larger experiments require up to 150 GB of memory and approximately 500 GB of available storage.",
+            "disambiguatingDescription": "Chameleon Reproducibility Challenge artifact for the PACT 2026 paper 'Splyce: SIMD Vectorization of Sparse Coiteration'.",
+            "keywords": "PACT 2026,artifact evaluation,reproducible research,sparse tensor,SIMD vectorization,compiler",
+            "name": "Splyce: SIMD Vectorization of Sparse Coiteration"
+        },
+        {
+            "@id": "trovi.json",
+            "@type": "CreativeWork",
+            "about": {
+                "@id": "./"
+            },
+            "conformsTo": {
+                "@id": "https://w3id.org/ro/crate/1.1"
+            }
+        },
+        {
+            "@id": "#author_0",
+            "@type": "Person",
+            "affiliation": "Virginia Tech",
+            "email": "kabilan@vt.edu",
+            "name": "Kabilan Mahathevan"
+        },
+        {
+            "@id": "#author_1",
+            "@type": "Person",
+            "affiliation": "Virginia Tech",
+            "email": "poornag@vt.edu",
+            "name": "Poorna Gunathilaka"
+        },
+        {
+            "@id": "#author_2",
+            "@type": "Person",
+            "affiliation": "Virginia Tech",
+            "email": "kirshanthans@vt.edu",
+            "name": "Kirshanthan Sundararajah"
+        },
+        {
+            "@id": "#ChameleonJupyterLab",
+            "@type": "SoftwareApplication",
+            "name": "Chameleon JupyterLab",
+            "trovi_arguments": "{}",
+            "trovi_type": "jupyterhub",
+            "url": "https://jupyter.chameleoncloud.org/"
+        }
+    ]
+}

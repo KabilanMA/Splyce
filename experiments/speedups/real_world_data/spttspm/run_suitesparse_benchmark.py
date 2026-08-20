@@ -1,64 +1,88 @@
 #!/usr/bin/env python3
-# run_suitesparse_benchmark.py — Real-world SpTTSpM benchmark, single
-# curated matrix.
+# run_suitesparse_benchmark.py — Real-world SpTTSpM benchmark, curated set.
 #
 # spttspm computes A(i,j,r) = Σ_k B(i,j,k) · C(k,r) (see spttspm_dn.mlir).
-# Only one real SuiteSparse matrix is used here:
+# Each job in JOBS below defines which SuiteSparse matrix supplies
+# tensor_C — B is always synthetic, since there's no natural SuiteSparse
+# source for a 3D tensor. There's no "b" key — only C can ever be real.
 #
-#   barth4 / Nasa group ("duplicate structural problem"): 6019 x 6019
-#   square, nnz=23492 — used for C(k,r). NOTE: "barth4" also exists in the
-#   Pothen group (a different, symmetric 40965-nnz matrix, also 6019x6019)
-#   — suitesparse/download_data.py's load_metadata() dedupes by name alone
-#   and would silently resolve to whichever entry appears last in
-#   matrix_metadata.json (Pothen), so this script looks up the Nasa entry
-#   directly by (name, group) instead of going through that by-name dict.
+# i and j are never constrained by anything (nothing besides B references
+# them), so they always use a fixed FREE_DIM (500). k and r are both C's
+# own dimension when C is real (r appears only in C and the output; k is
+# shared between B and C) — whichever real matrix supplies C must be
+# square (per matrix_metadata.json), so its one dimension covers both.
+# There's no case where C is absent: unlike spmttkrp/spmmh (which each
+# have two possible real-operand slots and can fall back on one when the
+# other is missing), spttspm has only one — a job with no real C has
+# nothing to derive k/r or a reference density from, so it's skipped.
 #
-# B(i,j,k) is synthetically generated (there's no natural SuiteSparse
-# source for a 3D tensor). Dimension choice:
-#   - k must equal C's own k dimension (6019, from barth4/Nasa — barth4 is
-#     square so this is also its num_cols) so B(i,j,k) actually conforms
-#     against C(k,r).
-#   - i and j aren't constrained by C at all, so both use a fixed 500.
-#   => B(i,j,k) = 500 x 500 x 6019.
-# B is generated at a fixed 0.06% nonzero density (sparsity=0.9994) via
-# generate_sparse_3d_tns below (ported from experiments/gen_data.py's
-# function of the same name).
+# Synthetic tensor_B is generated at density = max(C's own density,
+# DENSITY_FLOOR (0.001%)) — same floor-at-the-real-matrix's-own-density
+# rule ../spmttkrp/run_suitesparse_sweep.py and
+# ../spmttkrp/run_suitesparse_benchmark.py use.
 #
-# This script:
-#   1. Downloads barth4/Nasa (suitesparse/download_data.py's
-#      download_and_extract, called with the Nasa group directly — see
-#      note above; matrix_metadata.json must already exist, produced by
-#      suitesparse/scrape_metadata.py) and converts it to .tns
-#      (suitesparse/convert_to_tns.py's process_dir — drops explicit
-#      zeros; barth4/Nasa isn't symmetric so no mirroring happens),
-#      copying the result into this directory as tensor_C.tns.
-#   2. Generates tensor_B.tns (500 x 500 x 6019, 0.06% dense).
-#   3. Runs test_benchmark_spttspm_splyce_phase_001 FIRST, then
+# barth4 (the default job's matrix) also exists in the Pothen group (a
+# different, symmetric 40965-nnz matrix, also 6019x6019, distinct from the
+# Nasa "duplicate structural problem" one this uses) —
+# suitesparse/download_data.py's load_metadata() dedupes by name alone and
+# would silently resolve to whichever entry appears last in
+# matrix_metadata.json, so JOBS entries needing a specific group set an
+# explicit "group" key (load_matrix_entry looks the raw list up by
+# (name, group) directly instead of going through that by-name dict).
+# --matrix doesn't support this disambiguation — add a JOBS entry instead
+# if you need a specific group for an ambiguous name.
+#
+# For each job, this:
+#   1. Resolves k/r + the target synthetic density from metadata alone
+#      (matrix_metadata.json — run suitesparse/scrape_metadata.py first if
+#      that file doesn't exist yet), and estimates the combined peak memory
+#      B + C + dense A would need (see MEMORY_SAFETY_FRACTION; override
+#      with --memory-limit-gib) — skipping the job before downloading
+#      anything if that exceeds the budget. Unlike spgemm, there's no
+#      sparse-output binary for spttspm to fall back to (A is inherently a
+#      dense 3D tensor here — i x j x r, which can get very large if r,
+#      tied to a real matrix's own dimension, is big), so this just skips.
+#   2. Downloads + converts C (suitesparse/download_data.py +
+#      convert_to_tns.py — drops explicit zeros, mirrors symmetric
+#      entries).
+#   3. Generates synthetic tensor_B (generate_sparse_3d_tns below — ported
+#      from experiments/gen_data.py's function of the same name).
+#   4. Runs test_benchmark_spttspm_splyce_phase_001 FIRST, then
 #      test_benchmark_spttspm_scf — but only if Splyce didn't time out. If
 #      Splyce already hit the timeout, the (unvectorized, typically no
 #      faster) baseline is skipped entirely rather than wasting the same
 #      timeout on a run that's essentially guaranteed to also be too slow.
 #      Each binary loops 6 iterations internally per spttspm_dn.mlir's
 #      @main, writing a "benchmark" file with one time per line.
-#   4. Appends one summary row (dataset, b/c shape, sparsity, scf_median,
-#      splyce_median — median of the 5 non-cold-start iterations;
-#      scf_median is "SKIPPED" when Splyce timed out) to
-#      spttspm_realworld_results.csv, and every individual raw iteration
-#      time to spttspm_realworld_raw_runtimes.csv as a backup.
-#   5. Deletes tensor_B.tns/tensor_C.tns and the downloaded/converted
-#      suitesparse/barth4/ directory afterward.
+#   5. Appends one summary row (dataset, group, b/c shape, b_nnz, c_nnz,
+#      target density, scf_median, splyce_median — median of the 5
+#      non-cold-start iterations; scf_median is "SKIPPED" when Splyce
+#      timed out) to spttspm_realworld_results.csv, and every individual
+#      raw iteration time to spttspm_realworld_raw_runtimes.csv as a
+#      backup.
+#   6. Deletes tensor_B.tns/tensor_C.tns and the downloaded/converted
+#      suitesparse/<name>/ directory afterward.
 #
-# Both CSVs are appended to, not overwritten, so a re-run is a no-op once
-# barth4 is already recorded (unless the CSV row is removed first).
+# Both CSVs are appended to, not overwritten, so a re-run is a no-op once a
+# job is already recorded (unless the CSV row is removed first).
 #
 # Prerequisite: ./compile.sh has already been run, so
 # test_benchmark_spttspm_scf and test_benchmark_spttspm_splyce_phase_001
-# exist in this directory.
+# exist in this directory. There are no *_parallel variants for spttspm
+# (compile.sh doesn't build any), so this has no --mode/--cores, unlike
+# some of its siblings.
 #
 # Usage:
-#   ./run_suitesparse_benchmark.py
+#   ./run_suitesparse_benchmark.py             # every job in JOBS
+#   ./run_suitesparse_benchmark.py --matrix cat_ears_2_1
+#       Runs that one SuiteSparse matrix for tensor_C instead of JOBS —
+#       must be square. Ignores JOBS/--limit/group-disambiguation
+#       entirely.
+#   ./run_suitesparse_benchmark.py --limit 2    # only the first 2 (testing)
 #   ./run_suitesparse_benchmark.py --timeout 600  # per-binary-run timeout
 #                                                  # in seconds (default 300)
+#   ./run_suitesparse_benchmark.py --memory-limit-gib 64   # override the
+#       auto-detected memory budget (see MEMORY_SAFETY_FRACTION)
 
 import csv
 import json
@@ -87,17 +111,50 @@ TENSOR_B = os.path.join(SCRIPT_DIR, "tensor_B.tns")
 TENSOR_C = os.path.join(SCRIPT_DIR, "tensor_C.tns")
 BENCHMARK_FILE = os.path.join(SCRIPT_DIR, "benchmark")
 
-# The single curated job this script runs — see module docstring for why
-# the group is pinned explicitly (barth4 is ambiguous by name alone).
-MATRIX_NAME = "barth4"
-MATRIX_GROUP = "Nasa"
+# Floor for synthetic tensor_B's density (0.001%) — see module docstring.
+DENSITY_FLOOR = 0.001 / 100
 
-# Free index sizes (not constrained by C) for the synthetic B tensor.
-SYNTHETIC_I = 500
-SYNTHETIC_J = 500
+# Dimension for i/j — never constrained by anything (see module
+# docstring).
+FREE_DIM = 500
 
-# Fixed nonzero density for the synthetic B tensor.
-SYNTHETIC_DENSITY_PCT = 0.06
+# The curated jobs this script runs — see module docstring for why barth4
+# was chosen, and why its group is pinned explicitly. "group" is optional
+# (only needed to disambiguate an otherwise-ambiguous name).
+JOBS = [
+    {"name": "barth4", "c": "barth4", "group": "Nasa"},
+]
+
+# Estimated peak bytes/nonzero once a sparse tensor is loaded by the MLIR
+# sparse tensor runtime, which briefly holds a full COO intermediate
+# alongside the final level-format storage before freeing the COO (see the
+# sparse_tensor reader trace from the FROSTT-loading investigation) —
+# roughly 2x the raw coordinate size:
+#   tensor_B, 3D (3 coords + 1 value, 8 bytes each) * 2 = 64 bytes/nnz
+#   tensor_C, 2D (2 coords + 1 value, 8 bytes each) * 2 = 48 bytes/nnz
+TENSOR_B_BYTES_PER_NNZ = 64
+TENSOR_2D_BYTES_PER_NNZ = 48
+
+# Fraction of total system RAM usable as budget — only one job runs at a
+# time (sequential), so this is a fraction of the *whole machine's* RAM,
+# not divided across jobs; not the full total, to leave headroom for the
+# OS, page cache, the Python driver itself, and the fact that the
+# per-nonzero estimates above are approximate, not exact.
+MEMORY_SAFETY_FRACTION = 0.5
+
+
+def detect_total_memory_bytes():
+    # Linux-specific (/proc/meminfo) — falls back to a conservative 32 GiB
+    # if unreadable, so a detection failure fails toward skipping too much
+    # rather than too little.
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) * 1024  # value is in KiB
+    except (OSError, ValueError):
+        pass
+    return 32 * 1024 ** 3
 
 
 def load_matrix_entry(name, group):
@@ -184,24 +241,64 @@ def already_recorded():
         return {row["dataset"] for row in csv.DictReader(f)}
 
 
+def download_matrix(name, entry):
+    """Downloads + converts a named SuiteSparse matrix. Returns
+    (tns_path, dataset_dir) or (None, dataset_dir_or_None) on failure."""
+    dl.download_and_extract(name, entry["group"], force=False)
+    dataset_dir = os.path.join(SUITESPARSE_DIR, name)
+    if not os.path.isdir(dataset_dir):
+        print(f"  [skip] {name}: download/extract failed")
+        return None, None
+
+    cvt.process_dir(dataset_dir)
+    tns_path = os.path.join(dataset_dir, f"{name}.tns")
+    if not os.path.isfile(tns_path):
+        print(f"  [skip] {name}: conversion failed, no .tns produced")
+        return None, dataset_dir
+
+    return tns_path, dataset_dir
+
+
 def main():
     args = sys.argv[1:]
+    limit = None
     timeout = 300
+    memory_limit_gib = None
+    matrix_name = None
+    if "--limit" in args:
+        limit = int(args[args.index("--limit") + 1])
     if "--timeout" in args:
         timeout = int(args[args.index("--timeout") + 1])
+    if "--memory-limit-gib" in args:
+        memory_limit_gib = float(args[args.index("--memory-limit-gib") + 1])
+    if "--matrix" in args:
+        matrix_name = args[args.index("--matrix") + 1]
+
+    memory_budget_bytes = (
+        int(memory_limit_gib * 1024 ** 3) if memory_limit_gib is not None
+        else int(detect_total_memory_bytes() * MEMORY_SAFETY_FRACTION)
+    )
+    print(f"Memory budget per job: {memory_budget_bytes / 1024**3:.1f} GiB"
+          + (" (explicit)" if memory_limit_gib is not None else
+             f" ({MEMORY_SAFETY_FRACTION:.0%} of detected total RAM)"))
 
     if not (os.path.isfile(BASELINE_BIN) and os.path.isfile(SPLYCE_BIN)):
         sys.exit("error: binaries not found — run ./compile.sh first")
 
-    entry = load_matrix_entry(MATRIX_NAME, MATRIX_GROUP)
-    if entry is None:
-        sys.exit(f"error: {MATRIX_GROUP}/{MATRIX_NAME} not found in matrix_metadata.json")
-    name, group = entry["name"], entry["group"]
+    metadata = dl.load_metadata()
+
+    if matrix_name is not None:
+        entry = metadata.get(matrix_name)
+        if entry is None:
+            sys.exit(f"error: '{matrix_name}' not found in matrix_metadata.json")
+        if entry["num_rows"] != entry["num_cols"]:
+            sys.exit(f"error: '{matrix_name}' is {entry['num_rows']}x{entry['num_cols']}, not square")
+        jobs = [{"name": matrix_name, "c": matrix_name, "group": None}]
+    else:
+        jobs = JOBS[:limit] if limit is not None else JOBS
 
     done = already_recorded()
-    if name in done:
-        print(f"{name} already recorded — nothing to do")
-        return
+    print(f"{len(jobs)} job(s), {len(done)} already recorded — resuming")
 
     write_summary_header = not os.path.isfile(SUMMARY_CSV)
     write_raw_header = not os.path.isfile(RAW_BACKUP_CSV)
@@ -212,66 +309,123 @@ def main():
         if write_summary_header:
             summary_writer.writerow([
                 "dataset", "group", "b_shape", "c_shape",
-                "synthetic_density_pct", "scf_median_s", "splyce_median_s",
+                "b_nnz", "c_nnz", "target_density_pct",
+                "scf_median_s", "splyce_median_s",
             ])
         if write_raw_header:
             raw_writer.writerow(["dataset", "config", "iteration", "time_s"])
 
-        print(f"=== {group}/{name} (nnz={entry['nnz']}) ===")
-        dataset_dir = os.path.join(SUITESPARSE_DIR, name)
+        for job in jobs:
+            name = job["name"]
+            if name in done:
+                continue
 
-        try:
-            dl.download_and_extract(name, group, force=False)
-            if not os.path.isdir(dataset_dir):
-                sys.exit(f"  [skip] {name}: download/extract failed")
+            print(f"=== {name} ===")
+            downloaded_dirs = []
 
-            cvt.process_dir(dataset_dir)
-            tns_path = os.path.join(dataset_dir, f"{name}.tns")
-            if not os.path.isfile(tns_path):
-                sys.exit(f"  [skip] {name}: conversion failed, no .tns produced")
+            try:
+                c_name = job["c"]
+                c_group = job.get("group")
 
-            shutil.copyfile(tns_path, TENSOR_C)
-            dim_k = entry["num_rows"]  # C(k,r); square, so num_rows == num_cols == r too
+                if c_name is None:
+                    print(f"  [skip] {name}: job specifies no real matrix for C "
+                          f"(need one to derive k/r and a reference density)")
+                    continue
 
-            synthetic_sparsity = 1.0 - (SYNTHETIC_DENSITY_PCT / 100.0)
+                if c_group is not None:
+                    entry = load_matrix_entry(c_name, c_group)
+                    if entry is None:
+                        print(f"  [skip] {name}: {c_group}/{c_name} not found in matrix_metadata.json")
+                        continue
+                else:
+                    entry = metadata.get(c_name)
+                    if entry is None:
+                        print(f"  [skip] {name}: '{c_name}' not found in matrix_metadata.json")
+                        continue
+                group = entry["group"]
 
-            print(f"  [generate] tensor_B ({SYNTHETIC_I} x {SYNTHETIC_J} x {dim_k}) ...")
-            generate_sparse_3d_tns(TENSOR_B, SYNTHETIC_I, SYNTHETIC_J, dim_k, synthetic_sparsity)
+                if entry["num_rows"] != entry["num_cols"]:
+                    print(f"  [skip] {name}: '{c_name}' is {entry['num_rows']}x{entry['num_cols']}, not square")
+                    continue
 
-            print("  [run] splyce phase_001 ...")
-            splyce_times, splyce_timed_out = run_binary(SPLYCE_BIN, timeout)
+                # k and r are both C's own dimension (C is square); i and j
+                # are always free (see module docstring).
+                i_dim = FREE_DIM
+                j_dim = FREE_DIM
+                k_dim = entry["num_rows"]
+                r_dim = entry["num_rows"]
 
-            if splyce_timed_out:
-                print("  [skip] splyce timed out — skipping baseline run")
-                scf_times, scf_med = None, "SKIPPED"
-            else:
-                print("  [run] baseline (scf) ...")
-                scf_times, _ = run_binary(BASELINE_BIN, timeout * 5)
-                scf_med = median_excl_first(scf_times) if scf_times else "NA"
+                c_nnz = entry["nnz"]
+                c_density = c_nnz / (k_dim * r_dim)
+                target_density = max(c_density, DENSITY_FLOOR)
+                target_sparsity = 1.0 - target_density
 
-            for i, t in enumerate(splyce_times or []):
-                raw_writer.writerow([name, "splyce_phase_001", i, t])
-            for i, t in enumerate(scf_times or []):
-                raw_writer.writerow([name, "scf", i, t])
-            rf.flush()
+                # B and C, AND the dense output A, are all simultaneously
+                # resident (see module docstring) — estimate the combined
+                # peak before downloading anything. A is i x j x r and
+                # fully dense — the term that actually needs watching here,
+                # since r scales with C's own (possibly huge) dimension.
+                expected_b_nnz = target_density * (i_dim * j_dim * k_dim)
+                tensor_b_bytes = expected_b_nnz * TENSOR_B_BYTES_PER_NNZ
+                tensor_c_bytes = c_nnz * TENSOR_2D_BYTES_PER_NNZ
+                dense_a_bytes = i_dim * j_dim * r_dim * 8
+                estimated_peak_bytes = tensor_b_bytes + tensor_c_bytes + dense_a_bytes
 
-            splyce_med = median_excl_first(splyce_times) if splyce_times else "NA"
+                if estimated_peak_bytes > memory_budget_bytes:
+                    print(f"  [skip] estimated peak memory {estimated_peak_bytes / 1024**3:.1f} GiB "
+                          f"(B={tensor_b_bytes / 1024**3:.1f} C={tensor_c_bytes / 1024**3:.1f} "
+                          f"A={dense_a_bytes / 1024**3:.1f} GiB) "
+                          f"> budget {memory_budget_bytes / 1024**3:.1f} GiB — skipping {name}")
+                    continue
 
-            if splyce_med != "NA":
-                summary_writer.writerow([
-                    name, group,
-                    f"{SYNTHETIC_I}x{SYNTHETIC_J}x{dim_k}", f"{dim_k}x{dim_k}",
-                    SYNTHETIC_DENSITY_PCT, scf_med, splyce_med,
-                ])
-            sf.flush()
-            print(f"  scf_median={scf_med}  splyce_median={splyce_med}")
+                print(f"=== {group}/{c_name} (nnz={c_nnz}) ===")
 
-        finally:
-            for f in (TENSOR_B, TENSOR_C):
-                if os.path.isfile(f):
-                    os.remove(f)
-            if os.path.isdir(dataset_dir):
-                shutil.rmtree(dataset_dir)
+                tns_path, ddir = download_matrix(c_name, entry)
+                if ddir is not None:
+                    downloaded_dirs.append(ddir)
+                if tns_path is None:
+                    continue
+
+                shutil.copyfile(tns_path, TENSOR_C)
+
+                print(f"  [generate] tensor_B ({i_dim} x {j_dim} x {k_dim}) @ target_density={target_density:.6g} ...")
+                b_nnz = generate_sparse_3d_tns(TENSOR_B, i_dim, j_dim, k_dim, target_sparsity)
+
+                print("  [run] splyce phase_001 ...")
+                splyce_times, splyce_timed_out = run_binary(SPLYCE_BIN, timeout)
+
+                if splyce_timed_out:
+                    print("  [skip] splyce timed out — skipping baseline run")
+                    scf_times, scf_med = None, "SKIPPED"
+                else:
+                    print("  [run] baseline (scf) ...")
+                    scf_times, _ = run_binary(BASELINE_BIN, timeout * 5)
+                    scf_med = median_excl_first(scf_times) if scf_times else "NA"
+
+                for i, t in enumerate(splyce_times or []):
+                    raw_writer.writerow([name, "splyce_phase_001", i, t])
+                for i, t in enumerate(scf_times or []):
+                    raw_writer.writerow([name, "scf", i, t])
+                rf.flush()
+
+                splyce_med = median_excl_first(splyce_times) if splyce_times else "NA"
+
+                if splyce_med != "NA":
+                    summary_writer.writerow([
+                        name, group, f"{i_dim}x{j_dim}x{k_dim}", f"{k_dim}x{r_dim}",
+                        b_nnz, c_nnz, target_density * 100,
+                        scf_med, splyce_med,
+                    ])
+                sf.flush()
+                print(f"  scf_median={scf_med}  splyce_median={splyce_med}")
+
+            finally:
+                for f in (TENSOR_B, TENSOR_C):
+                    if os.path.isfile(f):
+                        os.remove(f)
+                for d in downloaded_dirs:
+                    if os.path.isdir(d):
+                        shutil.rmtree(d)
 
     print(f"Done. Summary: {SUMMARY_CSV}")
     print(f"Raw backup: {RAW_BACKUP_CSV}")

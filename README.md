@@ -58,11 +58,9 @@ Splyce recognizes these patterns and converts them into vectorized "fast lanes" 
 - **Git**
 - **Python** 3.10+
 - **C++ Compiler** (GCC 13+)
-- **CPU**: `x86_64` -- AVX-512 (F + VL) support required only for [Evaluation](#evaluation) (`experiments/`); [Getting Started](#getting-started) and [Usage Examples](#usage-examples) run on any `x86_64` CPU.
+- **CPU**: `x86_64` — every `clang` invocation in this repo ([Getting Started](#getting-started), [Usage Examples](#usage-examples), and [Evaluation](#evaluation)/`experiments/`) builds with `-march=native`, so everything builds and runs on whatever `x86_64` CPU you actually have.
 
-> `experiments/`'s `clang` invocations hardcode `-mavx512f -mavx512vl` on purpose -- that pins every kernel to the exact ISA the paper's reference numbers were measured on, so results stay comparable across runs. It was only tested on AVX-512 hardware, and won't build/run on anything else.
->
-> [Getting Started](#getting-started) (`playground/run.sh`) and [Usage Examples](#usage-examples)' `clang` invocations instead use `-march=native`, so you can build and run them on whatever CPU you actually have, AVX-512 or not, just to see Splyce work end-to-end. The tradeoff: performance and speedup numbers from these aren't meant to be compared against the paper's reference numbers or across machines -- only `experiments/` is held to that bar.
+> The paper's reference numbers under [Evaluation](#evaluation) were measured on AVX-512 hardware specifically. `-march=native` means every experiment still runs and produces valid results on any `x86_64` CPU, but the *numbers* it produces reflect your own machine's SIMD capabilities — they aren't meant to be compared directly against the reference CSVs, or across machines, unless yours happens to match closely.
 
 ### Platform-Specific Installation
 
@@ -149,16 +147,11 @@ export PATH=$LLVM_INSTALL/bin:$PATH
 
 ### Step 2: Build Splyce Pass
 
-`$LLVM_INSTALL` here is the same one exported in Step 1 (Option A or B) - it's what points `MLIR_DIR`/`LLVM_DIR` at your built/installed LLVM. Also set `--gcc-install-dir` below to the same GCC install you built LLVM's runtimes against earlier, so Splyce links against matching C++ standard library headers/libs.
+`$LLVM_INSTALL` here is the same one exported in Step 1 (Option A or B) - `CMakeLists.txt` derives `MLIR_DIR`/`LLVM_DIR` from it automatically, so you don't need to pass either explicitly unless you want to point at a *different* LLVM install than `$LLVM_INSTALL` (pass `-DMLIR_DIR=... -DLLVM_DIR=...` to override). `CMakeLists.txt` also defaults to `clang`/`clang++` (unless you pass `-DCMAKE_C_COMPILER=`/`-DCMAKE_CXX_COMPILER=`, or have `CC`/`CXX` set) and to a `Release` build (unless you pass `-DCMAKE_BUILD_TYPE=...`). Also set `--gcc-install-dir` below to the same GCC install you built LLVM's runtimes against earlier, so Splyce links against matching C++ standard library headers/libs.
 
 ```bash
 cd /path/to/splyce
 cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DMLIR_DIR=$LLVM_INSTALL/lib/cmake/mlir \
-  -DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm \
   -DCMAKE_C_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13" \
   -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13"
 

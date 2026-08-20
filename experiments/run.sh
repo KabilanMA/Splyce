@@ -56,12 +56,41 @@
 # 0.06%-dense synthetic B) — see each one's own run_suitesparse_benchmark.py
 # for exact shapes/densities.
 #
+# A third kind, CLUSTERING_EXPERIMENTS (experiments/clustering/<kernel>/) —
+# for each one, this instead:
+#   1. Compiles it (<experiment>/compile.sh), which lowers/translates/
+#      compiles that kernel's already-Splyce-vectorized
+#      <kernel>_splyce_scf.mlir (not sparsification/vectorization from
+#      scratch, unlike the real-world-data kernels above) into a single
+#      binary named exactly the kernel (e.g. ./spgemm, not
+#      test_benchmark_*), which — unlike the other two kinds — also prints
+#      "Scalar elements processed"/"SIMD elements processed" (Splyce
+#      fast-lane vs. scalar-epilogue coiteration counts) alongside its
+#      timing, since that per-run breakdown is the point of this
+#      experiment category.
+#   2. Runs its curated benchmark (<experiment>/run_suitesparse_benchmark.py),
+#      which downloads/generates the JOBS (or DATASETS) it needs, runs the
+#      compiled binary once per job (not scf-baseline-vs-Splyce — there's
+#      no baseline binary here), appends to its own
+#      <kernel>_clustering_results.csv, and already deletes its own
+#      tensor_*.tns/benchmark and the downloaded suitesparse/<name>/
+#      director(y/ies) internally once it's done.
+#   3. Deletes the compiled binary and the two intermediate files
+#      compile.sh leaves behind (<kernel>_llvm.mlir, <kernel>_splyce.ll —
+#      unlike the real-world-data kernels' compile.sh, this one doesn't
+#      clean those up itself).
+#   Before the first such experiment, this also runs
+#   suitesparse/scrape_metadata.py once if matrix_metadata.json doesn't
+#   exist yet, same as the real-world-data kernels above.
+#
 # Add new experiment names to ALL_EXPERIMENTS (and their directory in
 # EXPERIMENT_DIR) as they're set up — each synthetic-data experiment needs
 # a compile.sh, a run.sh, and a matching generator in gen_data.c; each
 # real-world-data experiment needs a compile.sh and a
 # run_suitesparse_benchmark.py, and its name added to
-# REALWORLD_EXPERIMENTS below.
+# REALWORLD_EXPERIMENTS below; each clustering experiment needs a
+# compile.sh and a run_suitesparse_benchmark.py, and its name added to
+# CLUSTERING_EXPERIMENTS below.
 #
 # Usage:
 #   ./run.sh all                  # every experiment in ALL_EXPERIMENTS
@@ -74,9 +103,26 @@
 #                                   # (speedups/real_world_data/print_
 #                                   # realworld_summary.py) once all 5 have
 #                                   # finished
+#   ./run.sh clustering             # the 5 clustering/<kernel> experiments
+#                                   # (not part of "all" — see usage())
 #   ./run.sh <experiment> [...]    # one or more individual experiments by name
 #                                   # (e.g. ./run.sh phase_ablation, or
 #                                   # ./run.sh spgemm_speedup spmspv_speedup)
+#
+#   REALWORLD_MODE=multicore REALWORLD_CORES=n ./run.sh <realworld-experiment>
+#       Real-world-data experiments only. Passes --mode multicore (and
+#       --cores "$REALWORLD_CORES", if that's also set) to the underlying
+#       run_suitesparse_*.py script instead of the default single-threaded
+#       run. To pin these to a specific NUMA node/CPU set, wrap the whole
+#       ./run.sh invocation in `numactl ...`.
+#
+#   REALWORLD_MATRIX=name ./run.sh <realworld-experiment>
+#       Passes --matrix "$REALWORLD_MATRIX" to the underlying script, for
+#       ones that support running a single named SuiteSparse matrix instead
+#       of their default job set (spgemm_realworld and the _sweep scripts,
+#       as of when this was added — check the target script's own --help/
+#       usage comment if unsure). Silently unused by scripts that don't
+#       recognize --matrix.
 
 set -euo pipefail
 
@@ -117,6 +163,15 @@ declare -A EXPERIMENT_DIR=(
   [spmspv_realworld]="speedups/real_world_data/spmspv"
   [spmttkrp_realworld]="speedups/real_world_data/spmttkrp"
   [spttspm_realworld]="speedups/real_world_data/spttspm"
+  [spgemm_realworld_sweep]="speedups/real_world_data/spgemm"
+  [spmspv_realworld_sweep]="speedups/real_world_data/spmspv"
+  [spmttkrp_realworld_sweep]="speedups/real_world_data/spmttkrp"
+  [spmttkrp_frostt]="speedups/real_world_data/spmttkrp"
+  [spgemm_clustering]="clustering/spgemm"
+  [spmmh_clustering]="clustering/spmmh"
+  [spmspv_clustering]="clustering/spmspv"
+  [spmttkrp_clustering]="clustering/spmttkrp"
+  [spttspm_clustering]="clustering/spttspm"
 )
 
 # "table2" run.sh target: the five synthetic-data speedup kernels.
@@ -137,13 +192,33 @@ REALDATA_EXPERIMENTS=(
   spttspm_realworld
 )
 
+# "clustering" run.sh target: the five clustering/<kernel> experiments.
+CLUSTERING_EXPERIMENTS=(
+  spgemm_clustering
+  spmspv_clustering
+  spmttkrp_clustering
+  spmmh_clustering
+  spttspm_clustering
+)
+
 usage() {
-  echo "Usage: $0 all|table2|realdata|<experiment> [<experiment> ...]" >&2
+  echo "Usage: $0 all|table2|realdata|clustering|<experiment> [<experiment> ...]" >&2
   echo "  all                 - run every experiment" >&2
   echo "  table2              - run ${TABLE2_EXPERIMENTS[*]}" >&2
   echo "  realdata            - run ${REALDATA_EXPERIMENTS[*]}" >&2
+  echo "  clustering          - run ${CLUSTERING_EXPERIMENTS[*]} (not part of 'all')" >&2
   echo "  <experiment> [...]  - run one or more individual experiments by name" >&2
   echo "Available experiments: ${ALL_EXPERIMENTS[*]}" >&2
+  echo "Also available individually (not in 'all'/'realdata' — spans ~169" >&2
+  echo "SuiteSparse groups, some multi-billion nnz): spgemm_realworld_sweep," >&2
+  echo "spmspv_realworld_sweep, spmttkrp_realworld_sweep" >&2
+  echo "  (run its script directly with --matrix <name> for just one matrix)" >&2
+  echo "Also available individually: spmttkrp_frostt (real 3D FROSTT tensor" >&2
+  echo "for spmttkrp's tensor_B — ~600MB download, see" >&2
+  echo "speedups/real_world_data/frostt/download_data.py for available names)" >&2
+  echo "Also available individually or via 'clustering': ${CLUSTERING_EXPERIMENTS[*]}" >&2
+  echo "  (per-run SIMD-fastlane/scalar-epilogue coiteration counts — see" >&2
+  echo "  clustering/<kernel>/run_suitesparse_benchmark.py)" >&2
   exit 1
 }
 
@@ -163,6 +238,9 @@ case "$1" in
   realdata)
     EXPERIMENTS=("${REALDATA_EXPERIMENTS[@]}")
     ;;
+  clustering)
+    EXPERIMENTS=("${CLUSTERING_EXPERIMENTS[@]}")
+    ;;
   *)
     EXPERIMENTS=("$@")
     for experiment in "${EXPERIMENTS[@]}"; do
@@ -174,14 +252,29 @@ case "$1" in
     ;;
 esac
 
-# Experiment names driven by run_suitesparse_benchmark.py (compile.sh +
-# a curated real/synthetic matrix pairing) instead of gen_data.sh + run.sh.
+# Experiment names driven by a downloading python script (compile.sh +
+# that script) instead of gen_data.sh + run.sh — every one of these is
+# SuiteSparse-based except spmttkrp_frostt (FROSTT-based; see
+# speedups/real_world_data/frostt/download_data.py).
 REALWORLD_EXPERIMENTS=(
   spgemm_realworld
   spmmh_realworld
   spmspv_realworld
   spmttkrp_realworld
   spttspm_realworld
+  spgemm_realworld_sweep
+  spmspv_realworld_sweep
+  spmttkrp_realworld_sweep
+  spmttkrp_frostt
+)
+
+# Which script each realworld experiment's directory is run with —
+# defaults to run_suitesparse_benchmark.py below when unset here.
+declare -A REALWORLD_SCRIPT=(
+  [spgemm_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmspv_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmttkrp_realworld_sweep]="run_suitesparse_sweep.py"
+  [spmttkrp_frostt]="run_frostt_benchmark.py"
 )
 
 is_realworld() {
@@ -190,6 +283,22 @@ is_realworld() {
     [[ "$rw" == "$name" ]] && return 0
   done
   return 1
+}
+
+is_clustering() {
+  local name="$1"
+  for cl in "${CLUSTERING_EXPERIMENTS[@]}"; do
+    [[ "$cl" == "$name" ]] && return 0
+  done
+  return 1
+}
+
+# spmttkrp_frostt is FROSTT-based, not SuiteSparse-based — no
+# matrix_metadata.json scrape needed for it. Clustering experiments are
+# all SuiteSparse-based too.
+is_suitesparse() {
+  local name="$1"
+  { is_realworld "$name" && [[ "$name" != "spmttkrp_frostt" ]]; } || is_clustering "$name"
 }
 
 SUITESPARSE_DIR="$SCRIPT_DIR/speedups/real_world_data/suitesparse"
@@ -203,6 +312,34 @@ for experiment in "${EXPERIMENTS[@]}"; do
   echo "========================================"
 
   if is_realworld "$experiment"; then
+    if is_suitesparse "$experiment" && [[ ! -f "$SUITESPARSE_METADATA" ]]; then
+      echo "[$experiment] matrix_metadata.json not found — scraping SuiteSparse metadata (one-time) ..."
+      ( cd "$SUITESPARSE_DIR" && ./scrape_metadata.py )
+    fi
+
+    echo "[$experiment] Compiling ..."
+    ( cd "$exp_dir" && ./compile.sh )
+
+    script="${REALWORLD_SCRIPT[$experiment]:-run_suitesparse_benchmark.py}"
+    script_args=(--timeout 1000000000)
+    if [[ "${REALWORLD_MODE:-single}" == "multicore" ]]; then
+      script_args+=(--mode multicore)
+      [[ -n "${REALWORLD_CORES:-}" ]] && script_args+=(--cores "$REALWORLD_CORES")
+    fi
+    [[ -n "${REALWORLD_MATRIX:-}" ]] && script_args+=(--matrix "$REALWORLD_MATRIX")
+    echo "[$experiment] Downloading real-world data and running ($script${REALWORLD_MODE:+, mode=$REALWORLD_MODE}) ..."
+    ( cd "$exp_dir" && "./$script" "${script_args[@]}" )
+
+    echo "[$experiment] Deleting compiled binaries ..."
+    rm -f "$exp_dir"/test_benchmark_*
+    # tensor_*.tns, benchmark, and the downloaded suitesparse/<name>/
+    # director(y/ies) are already deleted by run_suitesparse_benchmark.py
+    # itself as each job finishes — this only needs to catch anything left
+    # behind by a run that was interrupted before its own cleanup ran.
+    rm -f "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
+
+    echo "[$experiment] Done. Results in $exp_dir"
+  elif is_clustering "$experiment"; then
     if [[ ! -f "$SUITESPARSE_METADATA" ]]; then
       echo "[$experiment] matrix_metadata.json not found — scraping SuiteSparse metadata (one-time) ..."
       ( cd "$SUITESPARSE_DIR" && ./scrape_metadata.py )
@@ -211,15 +348,18 @@ for experiment in "${EXPERIMENTS[@]}"; do
     echo "[$experiment] Compiling ..."
     ( cd "$exp_dir" && ./compile.sh )
 
-    echo "[$experiment] Downloading real-world data and running ..."
-    ( cd "$exp_dir" && ./run_suitesparse_benchmark.py --timeout 100000)
+    echo "[$experiment] Downloading real-world data and running (run_suitesparse_benchmark.py) ..."
+    ( cd "$exp_dir" && ./run_suitesparse_benchmark.py )
 
-    echo "[$experiment] Deleting compiled binaries ..."
-    rm -f "$exp_dir"/test_benchmark_*
-    # tensor_*.tns, benchmark, and the downloaded suitesparse/<name>/
-    # director(y/ies) are already deleted by run_suitesparse_benchmark.py
-    # itself as each job finishes — this only needs to catch anything left
-    # behind by a run that was interrupted before its own cleanup ran.
+    # Binary is named exactly the kernel (e.g. ./spgemm), not
+    # test_benchmark_* — derive it from the directory name.
+    kernel="$(basename "$exp_dir")"
+    echo "[$experiment] Deleting compiled binary and intermediate files ..."
+    rm -f "$exp_dir/$kernel" "$exp_dir/${kernel}_llvm.mlir" "$exp_dir/${kernel}_splyce.ll"
+    # tensor_*.tns and benchmark are already deleted by
+    # run_suitesparse_benchmark.py itself as each job finishes — this only
+    # needs to catch anything left behind by a run that was interrupted
+    # before its own cleanup ran.
     rm -f "$exp_dir"/tensor_*.tns "$exp_dir"/benchmark
 
     echo "[$experiment] Done. Results in $exp_dir"

@@ -55,7 +55,7 @@ else
 fi
 
 CLANG_FLAGS=(
-  -O3 -mavx512f -mavx512vl -fno-vectorize -fno-slp-vectorize -fopenmp
+  -O3 -march=native -fno-vectorize -fno-slp-vectorize -fopenmp
   -L"${LLVM_INSTALL}/lib" -lmlir_c_runner_utils -lmlir_runner_utils
   -Wl,-rpath,"${LLVM_INSTALL}/lib"
   "${LIBOMP_RPATH_FLAGS[@]}"

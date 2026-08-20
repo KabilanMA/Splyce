@@ -352,6 +352,7 @@ static const char *EXPERIMENTS[] = {
     "phase_ablation", "multicore", "sparsity_scaling", "vector_width",
     "spgemm_speedup", "spmmh_speedup", "spmspv_speedup",
     "spmttkrp_speedup", "spttspm_speedup",
+    "gen_1d_vector", "gen_2d_tensor", "gen_3d_tensor",
 };
 #define NUM_EXPERIMENTS (sizeof(EXPERIMENTS) / sizeof(EXPERIMENTS[0]))
 
@@ -372,8 +373,30 @@ int main(int argc, char **argv) {
 
     const char *experiment = argv[1];
     const char *arg2 = (argc > 2) ? argv[2] : NULL;
+    const char *arg3 = (argc > 3) ? argv[3] : NULL;
+    const char *arg4 = (argc > 4) ? argv[4] : NULL;
+    const char *arg5 = (argc > 5) ? argv[5] : NULL;
+    const char *arg6 = (argc > 6) ? argv[6] : NULL;
 
-    if (strcmp(experiment, "phase_ablation") == 0) {
+    if (strcmp(experiment, "gen_1d_vector") == 0) {
+        if (!arg2 || !arg3 || !arg4) {
+            fprintf(stderr, "Usage: gen_data gen_1d_vector <filename> <dim> <sparsity>\n");
+            return 1;
+        }
+        generate_sparse_1d_tns(arg2, atoll(arg3), atof(arg4));
+    } else if (strcmp(experiment, "gen_2d_tensor") == 0) {
+        if (!arg2 || !arg3 || !arg4 || !arg5) {
+            fprintf(stderr, "Usage: gen_data gen_2d_tensor <filename> <rows> <cols> <sparsity>\n");
+            return 1;
+        }
+        generate_sparse_2d_tns(arg2, atoll(arg3), atoll(arg4), atof(arg5));
+    } else if (strcmp(experiment, "gen_3d_tensor") == 0) {
+        if (!arg2 || !arg3 || !arg4 || !arg5 || !arg6) {
+            fprintf(stderr, "Usage: gen_data gen_3d_tensor <filename> <dim1> <dim2> <dim3> <sparsity>\n");
+            return 1;
+        }
+        generate_sparse_3d_tns(arg2, atoll(arg3), atoll(arg4), atoll(arg5), atof(arg6));
+    } else if (strcmp(experiment, "phase_ablation") == 0) {
         generate_phase_ablation_data();
     } else if (strcmp(experiment, "multicore") == 0) {
         generate_multicore_data();

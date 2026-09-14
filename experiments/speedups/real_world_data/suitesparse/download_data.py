@@ -75,11 +75,14 @@ def download_and_extract(name, group, force):
 
 
 def median_square_matrix_per_group(metadata):
-    """One matrix per group: among that group's square matrices, the
-    median one by nnz (lower median if the group has an even count)."""
+    """One matrix per group: among that group's real-valued square
+    matrices, the median one by nnz (lower median if the group has an even
+    count). Complex/Hermitian matrices (is_real=False) are excluded —
+    convert_to_tns.py can't convert them, and Splyce's kernels are f64-only
+    anyway."""
     by_group = {}
     for entry in metadata.values():
-        if entry["num_rows"] == entry["num_cols"]:
+        if entry["num_rows"] == entry["num_cols"] and entry.get("is_real", True):
             by_group.setdefault(entry["group"], []).append(entry)
 
     selected = []

@@ -52,18 +52,16 @@ def drop_explicit_zeros(entries):
     return kept, dropped
 
 
-def convert_mtx_to_tns(mtx_path, tns_path):
-    with open(mtx_path) as f:
-        lines = f.readlines()
-
-    if not lines or not lines[0].startswith("%%MatrixMarket"):
+def _read_mtx_header(f, mtx_path):
+    first_line = f.readline()
+    if not first_line.startswith("%%MatrixMarket"):
         raise ValueError(f"{mtx_path}: missing %%MatrixMarket banner")
 
-    banner = lines[0].lower()
+    banner = first_line.lower()
     if "coordinate" not in banner:
         raise ValueError(
             f"{mtx_path}: only 'coordinate' (sparse) matrices are supported, "
-            f"found: {lines[0].strip()}"
+            f"found: {first_line.strip()}"
         )
     if "complex" in banner or "hermitian" in banner:
         raise ValueError(f"{mtx_path}: complex/hermitian matrices are not supported")
@@ -72,56 +70,82 @@ def convert_mtx_to_tns(mtx_path, tns_path):
     is_skew = "skew-symmetric" in banner
     is_symmetric = (not is_skew) and "symmetric" in banner
 
-    idx = 1
-    while idx < len(lines) and lines[idx].startswith("%"):
-        idx += 1
+    line = f.readline()
+    while line.startswith("%"):
+        line = f.readline()
+    rows, cols, nnz_declared = (int(t) for t in line.split())
 
-    rows, cols, nnz_declared = (int(t) for t in lines[idx].split())
-    idx += 1
+    return rows, cols, nnz_declared, is_pattern, is_skew, is_symmetric
 
-    raw_count = 0
-    entries = []
-    for line in lines[idx:]:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        r, c = int(parts[0]), int(parts[1])
-        val = 1.0 if is_pattern else float(parts[2])
-        raw_count += 1
-        entries.append((r, c, val))
-        if (is_symmetric or is_skew) and r != c:
-            entries.append((c, r, -val if is_skew else val))
 
-    dropped_zeros = 0
-    # entries, dropped_zeros = drop_explicit_zeros(entries)  # comment out to keep explicit zeros
+def convert_mtx_to_tns(mtx_path, tns_path):
+    # Large matrices (e.g. GAP-web) can have hundreds of millions of
+    # entries — buffering the whole file (or an expanded entries list) in
+    # memory gets OOM-killed. Stream instead: one pass to count the final
+    # (post-symmetric-expansion) entry total, then a second pass to stream
+    # data lines straight to the .tns file.
+    with open(mtx_path) as f:
+        rows, cols, nnz_declared, is_pattern, is_skew, is_symmetric = _read_mtx_header(
+            f, mtx_path
+        )
+
+        raw_count = 0
+        total_count = 0
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            r, c = int(parts[0]), int(parts[1])
+            raw_count += 1
+            total_count += 1
+            if (is_symmetric or is_skew) and r != c:
+                total_count += 1
 
     if raw_count != nnz_declared:
         raise ValueError(
             f"{mtx_path}: expected {nnz_declared} stored entries, found {raw_count}"
         )
 
-    with open(tns_path, "w") as out:
+    dropped_zeros = 0
+    # explicit-zero dropping (drop_explicit_zeros) isn't supported by this
+    # streaming path — it's already disabled by default (see comment above
+    # drop_explicit_zeros' definition).
+
+    with open(mtx_path) as f, open(tns_path, "w") as out:
+        _read_mtx_header(f, mtx_path)
         out.write("# extended FROSTT format\n")
-        out.write(f"2 {len(entries)}\n")
+        out.write(f"2 {total_count}\n")
         out.write(f"{rows} {cols}\n")
-        for r, c, val in entries:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            r, c = int(parts[0]), int(parts[1])
+            val = 1.0 if is_pattern else float(parts[2])
             out.write(f"{r} {c} {val:.4f}\n")
+            if (is_symmetric or is_skew) and r != c:
+                mirrored_val = -val if is_skew else val
+                out.write(f"{c} {r} {mirrored_val:.4f}\n")
 
     # Guard against the header/body ever drifting apart (e.g. a future
-    # edit to the write loop above): re-read the file and confirm the
-    # declared nnz on line 2 matches the number of data lines that follow.
+    # edit to the write loop above): stream back through the file and
+    # confirm the declared nnz on line 2 matches the number of data lines
+    # that follow.
     with open(tns_path) as f:
-        written = f.readlines()
-    written_nnz = int(written[1].split()[1])
-    written_data_lines = len(written) - 3
-    if written_nnz != written_data_lines or written_nnz != len(entries):
+        f.readline()
+        header_line = f.readline()
+        f.readline()
+        written_nnz = int(header_line.split()[1])
+        written_data_lines = sum(1 for _ in f)
+    if written_nnz != written_data_lines or written_nnz != total_count:
         raise ValueError(
             f"{tns_path}: header declares nnz={written_nnz} but wrote "
-            f"{written_data_lines} data lines ({len(entries)} entries computed)"
+            f"{written_data_lines} data lines ({total_count} entries computed)"
         )
 
-    return rows, cols, len(entries), dropped_zeros
+    return rows, cols, total_count, dropped_zeros
 
 
 def process_dir(d):
